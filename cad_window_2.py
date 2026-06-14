@@ -1491,6 +1491,19 @@ class MiniCAD(QMainWindow):
             f"<font color='#4fc3f7'>Мінімум без нового накладання: W≈{min_w:.1f} мм, H≈{min_h:.1f} мм</font>"
         )
 
+    def validate_target_size_or_warn(self, cur_w, cur_h, target_w, target_h):
+        if len(self.parametric_groups) < 2:
+            return True
+        if not self.has_new_group_overlap(cur_w, cur_h, target_w, target_h):
+            return True
+        min_w = self.find_min_safe_axis(cur_w, cur_h, "width")
+        min_h = self.find_min_safe_axis(cur_w, cur_h, "height")
+        self.lbl_status_calc.setText(
+            "<font color='red'>Заданий розмір дає накладання блоків. "
+            f"Безпечний мінімум: W≈{min_w:.1f} мм, H≈{min_h:.1f} мм.</font>"
+        )
+        return False
+
     def get_text_style_name(self, doc, font_name):
         font = (font_name or "STANDARD").strip()
         if font.upper() == "STANDARD":
@@ -1777,8 +1790,8 @@ class MiniCAD(QMainWindow):
 
     def preview_parametric_scale(self):
         self.record_action_snapshot()
-        self.process_parametric_percentage_scale(save_result=False, record_history=False)
-        self.lbl_status_calc.setText("<font color='#4fc3f7'>Перегляд застосовано тільки на екрані. Файл ще не збережено.</font>")
+        if self.process_parametric_percentage_scale(save_result=False, record_history=False):
+            self.lbl_status_calc.setText("<font color='#4fc3f7'>Перегляд застосовано тільки на екрані. Файл ще не збережено.</font>")
 
     def restore_current_dxf_from_disk(self):
         if not os.path.exists(self.dxf_path):
@@ -1806,7 +1819,21 @@ class MiniCAD(QMainWindow):
         self.project_meta["target_width"] = self.parse_numeric_text(self.input_target_width.text())
         self.project_meta["target_height"] = self.parse_numeric_text(self.input_target_height.text())
         self.is_loading_history = True
-        self.process_parametric_percentage_scale(save_result=True, record_history=False)
+        if not self.process_parametric_percentage_scale(save_result=True, record_history=False):
+            self.is_loading_history = False
+            if original_bytes is not None:
+                with open(self.dxf_path, "wb") as f:
+                    f.write(original_bytes)
+                self.doc = ezdxf.readfile(self.dxf_path)
+                self.save_original_geometries()
+            self.project_meta = original_meta
+            self.parametric_groups = original_groups
+            self.block_keep_state = original_keep_state
+            self.update_dimension_inputs_from_meta()
+            self.load_groups_into_list()
+            self.load_entities_into_list()
+            self.update_viewer()
+            return
         self.is_loading_history = False
 
         target_w = self.project_meta.get("target_width")
@@ -1864,14 +1891,23 @@ class MiniCAD(QMainWindow):
             rows = self.read_xlsx_rows(path) if path.lower().endswith(".xlsx") else self.read_csv_rows(path)
             jobs = self.extract_batch_jobs(rows)
             created = []
+            skipped = 0
             for job in jobs:
                 self.project_meta = copy.deepcopy(original_meta)
                 self.parametric_groups = copy.deepcopy(original_groups)
                 self.block_keep_state = copy.deepcopy(original_keep_state)
                 self.apply_imported_parameters(job)
                 self.is_loading_history = True
-                self.process_parametric_percentage_scale(save_result=True, record_history=False)
+                ok_to_export = self.process_parametric_percentage_scale(save_result=True, record_history=False)
                 self.is_loading_history = False
+                if not ok_to_export:
+                    skipped += 1
+                    if original_bytes is not None:
+                        with open(self.dxf_path, "wb") as f:
+                            f.write(original_bytes)
+                        self.doc = ezdxf.readfile(self.dxf_path)
+                        self.save_original_geometries()
+                    continue
 
                 target_w = self.project_meta.get("target_width")
                 target_h = self.project_meta.get("target_height")
@@ -1900,7 +1936,12 @@ class MiniCAD(QMainWindow):
             self.load_groups_into_list()
             self.load_entities_into_list()
             self.update_viewer()
-            self.lbl_status_calc.setText(f"<font color='#a5d6a7'>Пакет створено: {len(created)} DXF</font>")
+            if skipped:
+                self.lbl_status_calc.setText(
+                    f"<font color='#ff9800'>Пакет створено: {len(created)} DXF, пропущено через накладання: {skipped}</font>"
+                )
+            else:
+                self.lbl_status_calc.setText(f"<font color='#a5d6a7'>Пакет створено: {len(created)} DXF</font>")
         except Exception as e:
             self.lbl_status_calc.setText(f"<font color='red'>Помилка пакета: {e}</font>")
             if original_bytes is not None:
@@ -2403,9 +2444,12 @@ class MiniCAD(QMainWindow):
             cur_h = float(self.input_current_height.text().strip())
             target_h = float(self.input_target_height.text().strip())
         except ValueError:
-            return
+            return False
 
         self.collect_text_settings_from_inputs()
+        if not self.validate_target_size_or_warn(cur_w, cur_h, target_w, target_h):
+            return False
+
         should_record = save_result and record_history and not self.is_loading_history
         if should_record:
             before_snapshot = self.capture_full_state_snapshot()
@@ -2542,6 +2586,7 @@ class MiniCAD(QMainWindow):
             self.global_recalc_redo_stack.clear()
             self.update_history_buttons_state()
         self.update_viewer()
+        return True
 
     def save_original_geometries(self):
         self.original_geometries.clear()
