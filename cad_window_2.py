@@ -10,6 +10,7 @@ import xml.etree.ElementTree as ET
 
 import ezdxf
 import ezdxf.bbox as dxf_bbox
+from ezdxf.enums import TextEntityAlignment
 from ezdxf.math import Matrix44
 from ezdxf.addons.importer import Importer 
 
@@ -18,7 +19,7 @@ from PySide6.QtWidgets import (
     QListWidget, QListWidgetItem, QPushButton, QCheckBox,
     QGroupBox, QGraphicsRectItem, QComboBox, QLineEdit, QGraphicsView, 
     QGraphicsScene, QAbstractItemView, QGraphicsEllipseItem, QInputDialog, QFileDialog,
-    QGridLayout, QGraphicsTextItem, QGraphicsItem
+    QGridLayout, QGraphicsTextItem, QGraphicsSimpleTextItem, QGraphicsItem
 )
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QColor, QBrush, QPen, QPainterPath, QPainter, QGuiApplication
@@ -117,6 +118,30 @@ class DraggableDoorTextItem(QGraphicsTextItem):
         self.owner.on_door_text_item_moved(self)
 
 
+class DraggableDoorTextBoxItem(QGraphicsRectItem):
+    def __init__(self, x, y, width, height, owner, handle=None):
+        super().__init__(x, y, width, height)
+        self.owner = owner
+        self.handle = handle
+        self.setFlags(
+            QGraphicsItem.GraphicsItemFlag.ItemIsMovable |
+            QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+        )
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+
+    def mousePressEvent(self, event):
+        if self.handle:
+            self.owner.selected_handles = {self.handle}
+            self.owner.sync_list_from_handles()
+        self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.owner.on_door_text_box_moved(self)
+
+
 # --- МОДУЛЬ ПАРАМЕТРИЧНОГО РУХУ ---
 class ParametricEngine:
     @staticmethod
@@ -164,7 +189,7 @@ class MiniCAD(QMainWindow):
                 "x": 0.0,
                 "y": 0.0,
                 "height": 30.0,
-                "width_factor": 1.0,
+                "width_factor": 120.0,
                 "rotation": 0.0,
                 "font": "STANDARD",
                 "handle": None
@@ -236,7 +261,7 @@ class MiniCAD(QMainWindow):
             "x": 0.0,
             "y": 0.0,
             "height": 30.0,
-            "width_factor": 1.0,
+            "width_factor": 120.0,
             "rotation": 0.0,
             "font": "STANDARD",
             "handle": None
@@ -394,8 +419,8 @@ class MiniCAD(QMainWindow):
         inspector_group.setLayout(inspector_box)
         control_panel_layout.addWidget(inspector_group)
 
-        transform_group = QGroupBox("🔄 Трансформація виділених елементів (DXF)")
-        transform_group.setStyleSheet("QGroupBox { border: 1px solid #d32f2f; }")
+        self.transform_group = QGroupBox("🔄 Трансформація виділених елементів (DXF)")
+        self.transform_group.setStyleSheet("QGroupBox { border: 1px solid #d32f2f; }")
         transform_box = QVBoxLayout()
         
         rot_btn_layout = QHBoxLayout()
@@ -413,17 +438,17 @@ class MiniCAD(QMainWindow):
         transform_box.addLayout(rot_btn_layout)
 
         mirror_btn_layout = QHBoxLayout()
-        self.btn_mirror_h = QPushButton("Дзеркало ↔ (Гориз)")
+        self.btn_mirror_h = QPushButton("Дзеркало ↔ Ліво/право")
         self.btn_mirror_h.clicked.connect(lambda: self.transform_selected_entities("MIRROR_H"))
         mirror_btn_layout.addWidget(self.btn_mirror_h)
 
-        self.btn_mirror_v = QPushButton("Дзеркало ↕ (Верт)")
+        self.btn_mirror_v = QPushButton("Дзеркало ↕ Верх/низ")
         self.btn_mirror_v.clicked.connect(lambda: self.transform_selected_entities("MIRROR_V"))
         mirror_btn_layout.addWidget(self.btn_mirror_v)
         transform_box.addLayout(mirror_btn_layout)
 
-        transform_group.setLayout(transform_box)
-        control_panel_layout.addWidget(transform_group)
+        self.transform_group.setLayout(transform_box)
+        control_panel_layout.addWidget(self.transform_group)
 
         auto_scale_group = QGroupBox("🚀 Параметрична трансформація розмірів")
         auto_scale_box = QVBoxLayout()
@@ -452,7 +477,7 @@ class MiniCAD(QMainWindow):
 
         self.btn_apply_auto_scale = QPushButton("⚡ Запустити глобальний перерахунок")
         self.btn_apply_auto_scale.setStyleSheet("background-color: #007acc; color: white; font-weight: bold; padding: 6px;")
-        self.btn_apply_auto_scale.clicked.connect(self.process_parametric_percentage_scale)
+        self.btn_apply_auto_scale.clicked.connect(lambda: self.process_parametric_percentage_scale())
         auto_scale_box.addWidget(self.btn_apply_auto_scale)
 
         preview_buttons = QHBoxLayout()
@@ -533,8 +558,8 @@ class MiniCAD(QMainWindow):
         self.input_text_height.textChanged.connect(self.on_text_settings_changed)
         text_box.addWidget(self.input_text_height, 3, 1)
 
-        text_box.addWidget(QLabel("Ширина:"), 3, 2)
-        self.input_text_width_factor = QLineEdit("1")
+        text_box.addWidget(QLabel("Ширина рамки:"), 3, 2)
+        self.input_text_width_factor = QLineEdit("120")
         self.input_text_width_factor.textChanged.connect(self.on_text_settings_changed)
         text_box.addWidget(self.input_text_width_factor, 3, 3)
 
@@ -546,7 +571,14 @@ class MiniCAD(QMainWindow):
         text_box.addWidget(QLabel("Шрифт:"), 4, 2)
         self.combo_text_font = QComboBox()
         self.combo_text_font.setEditable(True)
-        self.combo_text_font.addItems(["STANDARD", "Arial", "Arial Narrow", "Simplex"])
+        self.combo_text_font.addItems([
+            "STANDARD", "Arial", "Arial Narrow", "Arial Black",
+            "Calibri", "Calibri Light", "Cambria", "Candara",
+            "Century Gothic", "Consolas", "Courier New",
+            "Georgia", "Impact", "Segoe UI", "Tahoma",
+            "Times New Roman", "Trebuchet MS", "Verdana",
+            "Simplex", "Romans", "Isocp"
+        ])
         self.combo_text_font.currentTextChanged.connect(self.on_text_settings_changed)
         text_box.addWidget(self.combo_text_font, 4, 3)
 
@@ -557,6 +589,19 @@ class MiniCAD(QMainWindow):
         self.btn_apply_door_text = QPushButton("Оновити текст")
         self.btn_apply_door_text.clicked.connect(self.apply_door_text_from_ui)
         text_box.addWidget(self.btn_apply_door_text, 6, 0, 1, 4)
+
+        self.btn_remove_door_text = QPushButton("Прибрати текстовий блок")
+        self.btn_remove_door_text.clicked.connect(self.remove_door_text_block)
+        text_box.addWidget(self.btn_remove_door_text, 7, 0, 1, 4)
+
+        align_text_buttons = QHBoxLayout()
+        self.btn_align_text_width = QPushButton("Вирівняти по ширині")
+        self.btn_align_text_width.clicked.connect(lambda: self.align_text_box_to_door("width"))
+        align_text_buttons.addWidget(self.btn_align_text_width)
+        self.btn_align_text_height = QPushButton("Вирівняти по висоті")
+        self.btn_align_text_height.clicked.connect(lambda: self.align_text_box_to_door("height"))
+        align_text_buttons.addWidget(self.btn_align_text_height)
+        text_box.addLayout(align_text_buttons, 8, 0, 1, 4)
         text_group.setLayout(text_box)
         control_panel_layout.addWidget(text_group)
         self.sync_text_inputs_from_meta()
@@ -887,7 +932,43 @@ class MiniCAD(QMainWindow):
         settings = self.default_text_settings()
         settings.update(self.project_meta.get("door_text", {}))
         self.project_meta["door_text"] = settings
+        if settings["enabled"] and hasattr(self, "check_door_text_enabled"):
+            self.check_door_text_enabled.blockSignals(True)
+            self.check_door_text_enabled.setChecked(True)
+            self.check_door_text_enabled.blockSignals(False)
         return settings
+
+    def text_box_width(self, settings):
+        return max(float(settings.get("width_factor", 120.0)), 1.0)
+
+    def text_box_height(self, settings):
+        return max(float(settings.get("height", 30.0)), 1.0)
+
+    def text_display_value(self, text):
+        return str(text).strip()
+
+    def add_centered_text_preview(self, parent_item, text, box_w, box_h, font_name):
+        if not text:
+            return
+        text_item = QGraphicsSimpleTextItem(text, parent_item)
+        font = text_item.font()
+        if font_name and font_name.upper() != "STANDARD":
+            font.setFamily(font_name)
+        font.setPointSizeF(100.0)
+        text_item.setFont(font)
+        text_item.setBrush(QBrush(QColor(255, 255, 255)))
+        text_item.setZValue(10)
+        text_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        br = text_item.boundingRect()
+        if br.width() <= 0 or br.height() <= 0:
+            return
+        scale = min((box_w * 0.9) / br.width(), (box_h * 0.75) / br.height())
+        scale = max(min(scale, 10.0), 0.01)
+        text_item.setScale(scale)
+        text_item.setPos(
+            (box_w - br.width() * scale) * 0.5,
+            (box_h - br.height() * scale) * 0.5
+        )
 
     def sync_text_inputs_from_meta(self):
         if not hasattr(self, "input_door_text"):
@@ -910,7 +991,7 @@ class MiniCAD(QMainWindow):
         self.input_text_x.setText(self.format_dimension_value(settings.get("x", 0.0)))
         self.input_text_y.setText(self.format_dimension_value(settings.get("y", 0.0)))
         self.input_text_height.setText(self.format_dimension_value(settings.get("height", 30.0)))
-        self.input_text_width_factor.setText(self.format_dimension_value(settings.get("width_factor", 1.0)))
+        self.input_text_width_factor.setText(self.format_dimension_value(settings.get("width_factor", 120.0)))
         self.input_text_rotation.setText(self.format_dimension_value(settings.get("rotation", 0.0)))
         self.combo_text_font.setCurrentText(str(settings.get("font", "STANDARD")))
         for widget in widgets:
@@ -920,13 +1001,13 @@ class MiniCAD(QMainWindow):
         if not hasattr(self, "input_door_text"):
             return self.get_text_settings()
         settings = self.get_text_settings()
-        settings["enabled"] = self.check_door_text_enabled.isChecked()
         settings["text"] = self.input_door_text.text()
+        settings["enabled"] = self.check_door_text_enabled.isChecked()
         for key, widget, fallback in (
             ("x", self.input_text_x, 0.0),
             ("y", self.input_text_y, 0.0),
             ("height", self.input_text_height, 30.0),
-            ("width_factor", self.input_text_width_factor, 1.0),
+            ("width_factor", self.input_text_width_factor, 120.0),
             ("rotation", self.input_text_rotation, 0.0),
         ):
             value = self.parse_numeric_text(widget.text())
@@ -941,7 +1022,12 @@ class MiniCAD(QMainWindow):
 
     def apply_door_text_from_ui(self):
         self.record_action_snapshot()
-        self.collect_text_settings_from_inputs()
+        settings = self.collect_text_settings_from_inputs()
+        settings["enabled"] = True
+        self.project_meta["door_text"] = settings
+        self.check_door_text_enabled.blockSignals(True)
+        self.check_door_text_enabled.setChecked(True)
+        self.check_door_text_enabled.blockSignals(False)
         self.apply_door_text_to_doc()
         self.doc.saveas(self.dxf_path)
         self.save_project_config()
@@ -949,6 +1035,84 @@ class MiniCAD(QMainWindow):
         self.load_entities_into_list()
         self.update_viewer()
         self.lbl_status_calc.setText("<font color='#a5d6a7'>Текст оновлено на DXF.</font>")
+
+    def remove_door_text_block(self):
+        self.record_action_snapshot()
+        settings = self.get_text_settings()
+        handle = settings.get("handle")
+        if handle:
+            self.selected_handles.discard(handle)
+            for group in self.parametric_groups:
+                group["handles"].discard(handle)
+            self.parametric_groups = [g for g in self.parametric_groups if g.get("handles")]
+        self.remove_managed_text_entity(self.doc, settings)
+        settings.update({
+            "enabled": False,
+            "text": "",
+            "handle": None
+        })
+        self.project_meta["door_text"] = settings
+        self.check_door_text_enabled.blockSignals(True)
+        self.check_door_text_enabled.setChecked(False)
+        self.check_door_text_enabled.blockSignals(False)
+        self.input_door_text.setText("")
+        self.doc.saveas(self.dxf_path)
+        self.save_original_geometries()
+        self.save_project_config()
+        self.load_entities_into_list()
+        self.load_groups_into_list()
+        self.update_viewer()
+        self.lbl_status_calc.setText("<font color='#a5d6a7'>Текстовий блок прибрано.</font>")
+
+    def get_non_text_dxf_bounds(self):
+        min_x, min_y = float("inf"), float("inf")
+        max_x, max_y = float("-inf"), float("-inf")
+        for entity in self.doc.modelspace():
+            tp = entity.dxftype()
+            if tp == "LINE":
+                x1, y1, _ = entity.dxf.start
+                x2, y2, _ = entity.dxf.end
+                min_x = min(min_x, x1, x2)
+                max_x = max(max_x, x1, x2)
+                min_y = min(min_y, y1, y2)
+                max_y = max(max_y, y1, y2)
+            elif tp in ("CIRCLE", "ARC"):
+                cx, cy, _ = entity.dxf.center
+                r = entity.dxf.radius
+                min_x = min(min_x, cx - r)
+                max_x = max(max_x, cx + r)
+                min_y = min(min_y, cy - r)
+                max_y = max(max_y, cy + r)
+        if min_x == float("inf"):
+            return None, None, None, None
+        return min_x, min_y, max_x, max_y
+
+    def align_text_box_to_door(self, dimension):
+        min_x, min_y, max_x, max_y = self.get_non_text_dxf_bounds()
+        if min_x is None:
+            self.lbl_status_calc.setText("<font color='red'>Не знайдено геометрію дверей для вирівнювання.</font>")
+            return
+        self.record_action_snapshot()
+        settings = self.collect_text_settings_from_inputs()
+        settings["enabled"] = True
+        if dimension == "width":
+            box_w = self.text_box_width(settings)
+            settings["x"] = min_x + ((max_x - min_x) - box_w) * 0.5
+            message = "Текстову рамку виставлено по центру ширини полотна."
+        else:
+            box_h = self.text_box_height(settings)
+            settings["y"] = min_y + ((max_y - min_y) - box_h) * 0.5
+            message = "Текстову рамку виставлено по центру висоти полотна."
+        self.project_meta["door_text"] = settings
+        self.apply_door_text_to_doc()
+        self.doc.saveas(self.dxf_path)
+        self.save_original_geometries()
+        self.save_project_config()
+        self.sync_text_inputs_from_meta()
+        self.load_entities_into_list()
+        self.sync_list_from_handles()
+        self.update_viewer()
+        self.lbl_status_calc.setText(f"<font color='#a5d6a7'>{message}</font>")
 
     def place_empty_door_text_block(self):
         self.record_action_snapshot()
@@ -963,6 +1127,13 @@ class MiniCAD(QMainWindow):
                 settings["y"] = min_y + (max_y - min_y) * 0.5
         self.project_meta["door_text"] = settings
         self.sync_text_inputs_from_meta()
+        entity = self.apply_door_text_to_doc()
+        if entity is not None:
+            self.selected_handles = {entity.dxf.handle}
+        self.doc.saveas(self.dxf_path)
+        self.save_original_geometries()
+        self.load_entities_into_list()
+        self.sync_list_from_handles()
         self.save_project_config()
         self.update_viewer()
         self.lbl_status_calc.setText("<font color='#4fc3f7'>Текстовий блок можна перетягнути мишкою.</font>")
@@ -978,9 +1149,29 @@ class MiniCAD(QMainWindow):
         if handle and handle in self.doc.entitydb:
             self.doc.entitydb[handle].dxf.insert = (settings["x"], settings["y"], 0.0)
             self.doc.saveas(self.dxf_path)
+            self.selected_handles = {handle}
         self.sync_text_inputs_from_meta()
         self.save_project_config()
         self.load_entities_into_list()
+        self.sync_list_from_handles()
+
+    def on_door_text_box_moved(self, item):
+        self.record_action_snapshot()
+        settings = self.get_text_settings()
+        settings["x"] = float(item.pos().x() + item.rect().x())
+        settings["y"] = float(-(item.pos().y() + item.rect().y() + item.rect().height()))
+        settings["enabled"] = True
+        self.project_meta["door_text"] = settings
+        self.apply_door_text_to_doc()
+        self.doc.saveas(self.dxf_path)
+        handle = settings.get("handle")
+        if handle:
+            self.selected_handles = {handle}
+        self.sync_text_inputs_from_meta()
+        self.save_project_config()
+        self.load_entities_into_list()
+        self.sync_list_from_handles()
+        self.update_viewer()
 
     def sync_opening_inputs_from_meta(self):
         if not hasattr(self, "combo_door_opening"):
@@ -1016,9 +1207,16 @@ class MiniCAD(QMainWindow):
                 min_y = min(min_y, y1, y2)
                 max_y = max(max_y, y1, y2)
             elif tp == "TEXT":
-                x, y, _ = entity.dxf.insert
-                h = float(entity.dxf.height)
-                w = max(len(str(entity.dxf.text)), 1) * h * 0.6 * float(getattr(entity.dxf, "width", 1.0))
+                settings = self.get_text_settings()
+                if settings.get("handle") == entity.dxf.handle:
+                    x = float(settings.get("x", 0.0))
+                    y = float(settings.get("y", 0.0))
+                    w = self.text_box_width(settings)
+                    h = self.text_box_height(settings)
+                else:
+                    x, y, _ = entity.dxf.insert
+                    h = float(entity.dxf.height)
+                    w = max(len(str(entity.dxf.text).strip()), 1) * h * 0.6 * float(getattr(entity.dxf, "width", 1.0))
                 min_x = min(min_x, x)
                 max_x = max(max_x, x + w)
                 min_y = min(min_y, y)
@@ -1026,6 +1224,107 @@ class MiniCAD(QMainWindow):
         if min_x == float("inf"):
             return None, None, None, None
         return min_x, min_y, max_x, max_y
+
+    def entity_bbox(self, entity):
+        tp = entity.dxftype()
+        if tp in ("CIRCLE", "ARC"):
+            cx, cy, _ = entity.dxf.center
+            r = entity.dxf.radius
+            return (cx - r, cy - r, cx + r, cy + r)
+        if tp == "LINE":
+            x1, y1, _ = entity.dxf.start
+            x2, y2, _ = entity.dxf.end
+            return (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
+        if tp == "TEXT":
+            settings = self.get_text_settings()
+            if settings.get("handle") == entity.dxf.handle:
+                x = float(settings.get("x", 0.0))
+                y = float(settings.get("y", 0.0))
+                w = self.text_box_width(settings)
+                h = self.text_box_height(settings)
+            else:
+                x, y, _ = entity.dxf.insert
+                h = float(entity.dxf.height)
+                w = max(len(str(entity.dxf.text).strip()), 1) * h * 0.6 * float(getattr(entity.dxf, "width", 1.0))
+            return (x, y, x + w, y + h)
+        return None
+
+    def transform_managed_text_settings(self, mode, cx, cy):
+        settings = self.get_text_settings()
+        handle = settings.get("handle")
+        if not handle or handle not in self.selected_handles:
+            return
+        box_w = self.text_box_width(settings)
+        box_h = self.text_box_height(settings)
+        center_x = float(settings.get("x", 0.0)) + box_w * 0.5
+        center_y = float(settings.get("y", 0.0)) + box_h * 0.5
+        dx = center_x - cx
+        dy = center_y - cy
+        rotation = float(settings.get("rotation", 0.0))
+
+        if mode == "ROT90":
+            center_x, center_y = cx - dy, cy + dx
+            rotation += 90.0
+        elif mode == "ROT180":
+            center_x, center_y = cx - dx, cy - dy
+            rotation += 180.0
+        elif mode == "ROT270":
+            center_x, center_y = cx + dy, cy - dx
+            rotation += 270.0
+        elif mode == "MIRROR_H":
+            center_x = 2 * cx - center_x
+            rotation = 180.0 - rotation
+        elif mode == "MIRROR_V":
+            center_y = 2 * cy - center_y
+            rotation = -rotation
+        else:
+            return
+
+        settings["x"] = center_x - box_w * 0.5
+        settings["y"] = center_y - box_h * 0.5
+        settings["rotation"] = rotation % 360.0
+        self.project_meta["door_text"] = settings
+        self.apply_door_text_to_doc()
+
+    def mirror_entity_horizontally(self, entity, axis_x):
+        tp = entity.dxftype()
+        if tp == "LINE":
+            sx, sy, sz = entity.dxf.start
+            ex, ey, ez = entity.dxf.end
+            entity.dxf.start = (2 * axis_x - sx, sy, sz)
+            entity.dxf.end = (2 * axis_x - ex, ey, ez)
+        elif tp in ("CIRCLE", "ARC"):
+            cx, cy, cz = entity.dxf.center
+            entity.dxf.center = (2 * axis_x - cx, cy, cz)
+            if tp == "ARC":
+                old_start = float(entity.dxf.start_angle)
+                old_end = float(entity.dxf.end_angle)
+                entity.dxf.start_angle = (180.0 - old_end) % 360.0
+                entity.dxf.end_angle = (180.0 - old_start) % 360.0
+        elif tp == "TEXT":
+            x, y, z = entity.dxf.insert
+            entity.dxf.insert = (2 * axis_x - x, y, z)
+            entity.dxf.rotation = (180.0 - float(getattr(entity.dxf, "rotation", 0.0))) % 360.0
+
+    def mirror_entity_vertically(self, entity, axis_y):
+        tp = entity.dxftype()
+        if tp == "LINE":
+            sx, sy, sz = entity.dxf.start
+            ex, ey, ez = entity.dxf.end
+            entity.dxf.start = (sx, 2 * axis_y - sy, sz)
+            entity.dxf.end = (ex, 2 * axis_y - ey, ez)
+        elif tp in ("CIRCLE", "ARC"):
+            cx, cy, cz = entity.dxf.center
+            entity.dxf.center = (cx, 2 * axis_y - cy, cz)
+            if tp == "ARC":
+                old_start = float(entity.dxf.start_angle)
+                old_end = float(entity.dxf.end_angle)
+                entity.dxf.start_angle = (-old_end) % 360.0
+                entity.dxf.end_angle = (-old_start) % 360.0
+        elif tp == "TEXT":
+            x, y, z = entity.dxf.insert
+            entity.dxf.insert = (x, 2 * axis_y - y, z)
+            entity.dxf.rotation = (-float(getattr(entity.dxf, "rotation", 0.0))) % 360.0
 
     def mirror_door_opening(self):
         min_x, min_y, max_x, max_y = self.get_dxf_bounds()
@@ -1053,9 +1352,10 @@ class MiniCAD(QMainWindow):
                 entity.dxf.insert = (2 * axis_x - x, y, z)
                 entity.dxf.rotation = (180.0 - float(getattr(entity.dxf, "rotation", 0.0))) % 360.0
         settings = self.get_text_settings()
-        settings["x"] = 2 * axis_x - float(settings.get("x", 0.0))
+        settings["x"] = 2 * axis_x - (float(settings.get("x", 0.0)) + self.text_box_width(settings))
         settings["rotation"] = (180.0 - float(settings.get("rotation", 0.0))) % 360.0
         self.project_meta["door_text"] = settings
+        self.apply_door_text_to_doc()
         self.project_meta["door_opening"] = "right" if self.project_meta.get("door_opening") != "right" else "left"
         self.doc.saveas(self.dxf_path)
         self.save_original_geometries()
@@ -1087,6 +1387,14 @@ class MiniCAD(QMainWindow):
                 max_x = max(max_x, sx, ex)
                 min_y = min(min_y, sy, ey)
                 max_y = max(max_y, sy, ey)
+            elif orig["type"] == "TEXT":
+                x, y, _ = orig["insert"]
+                h = float(orig["height"])
+                w = max(len(str(orig.get("text", "")).strip()), 1) * h * 0.6 * float(orig.get("width", 1.0))
+                min_x = min(min_x, x)
+                max_x = max(max_x, x + w)
+                min_y = min(min_y, y)
+                max_y = max(max_y, y + h)
         if min_x == float("inf"):
             return None
         return (min_x, min_y, max_x, max_y)
@@ -1211,22 +1519,30 @@ class MiniCAD(QMainWindow):
     def apply_door_text_to_doc(self, doc=None):
         doc = doc or self.doc
         settings = self.get_text_settings()
-        self.remove_managed_text_entity(doc, settings)
-        text = str(settings.get("text", "")).strip()
-        if not settings.get("enabled") or not text:
+        if not settings.get("enabled"):
+            self.remove_managed_text_entity(doc, settings)
             return None
+        text = self.text_display_value(settings.get("text", ""))
+        dxf_text = text if text else " "
         style_name = self.get_text_style_name(doc, settings.get("font", "STANDARD"))
-        entity = doc.modelspace().add_text(
-            text,
-            dxfattribs={
-                "insert": (float(settings.get("x", 0.0)), float(settings.get("y", 0.0)), 0.0),
-                "height": max(float(settings.get("height", 30.0)), 0.1),
-                "rotation": float(settings.get("rotation", 0.0)),
-                "style": style_name
-            }
-        )
-        entity.dxf.width = max(float(settings.get("width_factor", 1.0)), 0.01)
-        settings["handle"] = entity.dxf.handle
+        handle = settings.get("handle")
+        entity = doc.entitydb[handle] if handle and handle in doc.entitydb else None
+        if entity is None or entity.dxftype() != "TEXT":
+            entity = doc.modelspace().add_text(dxf_text)
+            settings["handle"] = entity.dxf.handle
+        box_x = float(settings.get("x", 0.0))
+        box_y = float(settings.get("y", 0.0))
+        box_w = self.text_box_width(settings)
+        box_h = self.text_box_height(settings)
+        text_h = max(box_h * 0.55, 0.1)
+        center_x = box_x + box_w * 0.5
+        center_y = box_y + box_h * 0.5
+        entity.dxf.text = dxf_text
+        entity.dxf.height = text_h
+        entity.dxf.style = style_name
+        entity.dxf.width = 1.0
+        entity.set_placement((center_x, center_y, 0.0), align=TextEntityAlignment.MIDDLE_CENTER)
+        entity.dxf.rotation = float(settings.get("rotation", 0.0))
         self.project_meta["door_text"] = settings
         return entity
 
@@ -1327,6 +1643,14 @@ class MiniCAD(QMainWindow):
             params = self.extract_table_parameters(rows)
             self.record_action_snapshot()
             self.apply_imported_parameters(params)
+            self.apply_door_text_to_doc()
+            self.doc.saveas(self.dxf_path)
+            self.save_project_config()
+            self.save_original_geometries()
+            self.update_dimension_inputs_from_meta()
+            self.sync_text_inputs_from_meta()
+            self.load_entities_into_list()
+            self.update_viewer()
             self.lbl_status_calc.setText(f"<font color='#a5d6a7'>Параметри імпортовано: {os.path.basename(path)}</font>")
         except Exception as e:
             self.lbl_status_calc.setText(f"<font color='red'>Помилка імпорту: {e}</font>")
@@ -1412,6 +1736,8 @@ class MiniCAD(QMainWindow):
                 text_settings[target_key] = params[source_key]
         if "text" in params and str(params["text"]).strip():
             text_settings["enabled"] = True
+            if "text_x" not in params and "text_y" not in params:
+                self.lbl_status_calc.setText("<font color='#4fc3f7'>Текст підставлено в попередньо задану рамку.</font>")
         self.project_meta["door_text"] = text_settings
         if "keep_blocks" in params and params["keep_blocks"]:
             keep_set = set(params["keep_blocks"])
@@ -1668,8 +1994,16 @@ class MiniCAD(QMainWindow):
         if not selected_entities: return
         self.record_action_snapshot()
 
-        cx = sum((e.left_x + e.right_x) / 2 for e in selected_entities) / len(selected_entities)
-        cy = sum((e.bottom_y + e.top_y) / 2 for e in selected_entities) / len(selected_entities)
+        bboxes = [self.entity_bbox(e) for e in selected_entities]
+        bboxes = [b for b in bboxes if b]
+        if not bboxes:
+            return
+        min_x = min(b[0] for b in bboxes)
+        min_y = min(b[1] for b in bboxes)
+        max_x = max(b[2] for b in bboxes)
+        max_y = max(b[3] for b in bboxes)
+        cx = (min_x + max_x) * 0.5
+        cy = (min_y + max_y) * 0.5
 
         for entity in selected_entities:
             if mode == "ROT90":
@@ -1688,18 +2022,16 @@ class MiniCAD(QMainWindow):
                 m3 = Matrix44.translate(cx, cy, 0)
                 m = m1 @ m2 @ m3
             elif mode == "MIRROR_H":
-                m1 = Matrix44.translate(-cx, -cy, 0)
-                m2 = Matrix44.scale(-1, 1, 1)
-                m3 = Matrix44.translate(cx, cy, 0)
-                m = m1 @ m2 @ m3
+                self.mirror_entity_horizontally(entity, cx)
+                continue
             elif mode == "MIRROR_V":
-                m1 = Matrix44.translate(-cx, -cy, 0)
-                m2 = Matrix44.scale(1, -1, 1)
-                m3 = Matrix44.translate(cx, cy, 0)
-                m = m1 @ m2 @ m3
+                self.mirror_entity_vertically(entity, cy)
+                continue
             else: 
                 continue
             entity.transform(m)
+
+        self.transform_managed_text_settings(mode, cx, cy)
 
         # --- РОЗУМНЕ ОНОВЛЕННЯ ПАРАМЕТРІВ ГРУПИ ПРИ ТРАНСФОРМАЦІЇ ---
         for group in self.parametric_groups:
@@ -1760,6 +2092,7 @@ class MiniCAD(QMainWindow):
         self.push_to_history()
         
         self.on_group_selection_changed() # <- Тут інтерфейс підтягне нові слова "Вгору", "Вниз" тощо
+        self.sync_text_inputs_from_meta()
         self.update_viewer()
         self.load_entities_into_list()
 
@@ -2109,6 +2442,11 @@ class MiniCAD(QMainWindow):
                 elif orig["type"] in ("CIRCLE", "ARC"):
                     entity.dxf.center = orig["center"]
                     entity.dxf.radius = orig["radius"]
+                elif orig["type"] == "TEXT":
+                    entity.dxf.insert = orig["insert"]
+                    entity.dxf.height = orig["height"]
+                    entity.dxf.width = orig["width"]
+                    entity.dxf.rotation = orig["rotation"]
                 continue
 
             shift_v, growth_v = ParametricEngine.get_transform(delta_w, delta_h, associated_group)
@@ -2173,6 +2511,26 @@ class MiniCAD(QMainWindow):
 
                 entity.dxf.radius = new_r
 
+            elif orig["type"] == "TEXT":
+                x, y, z = orig["insert"]
+                new_x = x + shift_v[0]
+                new_y = y + shift_v[1]
+                new_height = max(float(orig["height"]) + growth_v[1], 0.1)
+                new_width = max(float(orig["width"]), 0.01)
+                if growth_v[0] != 0.0:
+                    new_width = max(float(orig["width"]) + growth_v[0], 0.01)
+                entity.dxf.insert = (new_x, new_y, z)
+                entity.dxf.height = new_height
+                entity.dxf.width = new_width
+
+                settings = self.get_text_settings()
+                if settings.get("handle") == hndl:
+                    settings["x"] = new_x
+                    settings["y"] = new_y
+                    settings["height"] = new_height
+                    settings["width_factor"] = new_width
+                    self.project_meta["door_text"] = settings
+
         self.lbl_status_calc.setText(f"<font color='#a5d6a7'>ΔW={delta_w:+.1f} мм | ΔH={delta_h:+.1f} мм</font>")
         self.apply_door_text_to_doc()
         if save_result:
@@ -2196,6 +2554,30 @@ class MiniCAD(QMainWindow):
                 self.original_geometries[hndl] = {"type": "LINE", "start": entity.dxf.start, "end": entity.dxf.end}
             elif tp == "ARC":
                 self.original_geometries[hndl] = {"type": "ARC", "center": entity.dxf.center, "radius": entity.dxf.radius, "start_angle": entity.dxf.start_angle, "end_angle": entity.dxf.end_angle}
+            elif tp == "TEXT":
+                settings = self.get_text_settings()
+                if settings.get("handle") == hndl:
+                    insert = (
+                        float(settings.get("x", 0.0)),
+                        float(settings.get("y", 0.0)),
+                        0.0
+                    )
+                    height = self.text_box_height(settings)
+                    width = self.text_box_width(settings)
+                    text_value = settings.get("text", "")
+                else:
+                    insert = entity.dxf.insert
+                    height = float(entity.dxf.height)
+                    width = float(getattr(entity.dxf, "width", 1.0))
+                    text_value = entity.dxf.text
+                self.original_geometries[hndl] = {
+                    "type": "TEXT",
+                    "insert": insert,
+                    "height": height,
+                    "width": width,
+                    "rotation": float(getattr(entity.dxf, "rotation", 0.0)),
+                    "text": text_value
+                }
 
     def save_zones_history_state(self):
         state_snapshot = {
@@ -2323,10 +2705,118 @@ class MiniCAD(QMainWindow):
             self.restore_state_snapshot(next_snapshot)
 
     def set_interface_theme(self, theme_name):
-        if theme_name == "Темна":
-            self.setStyleSheet("QMainWindow { background-color: #1e1e1e; padding: 10 px;} QWidget { color: #d4d4d4; font-size: 12px; padding: 12 px;} QScrollArea { border: none; background-color: #252526; } QGroupBox { font-weight: bold; color: #007acc; border: 1px solid #3c3c3c; border-radius: 6px; margin-top: 15px; } QPushButton { background-color: #333333; border: 1px solid #454545; color: #ffffff; padding: 6px; border-radius: 4px; } QPushButton:hover { background-color: #454545; border-color: #007acc; } QLineEdit { background-color: #1e1e1e; border: 1px solid #3c3c3c; color: #ffffff; padding: 4px; } QListWidget { background-color: #1e1e1e; color: #d4d4d4; } QComboBox { background-color: #1e1e1e; color: #ffffff; border: 1px solid #3c3c3c; padding: 2px; }")
+        is_dark = theme_name == "Темна"
+        if is_dark:
+            self.setStyleSheet("""
+                QMainWindow { background-color: #1e1e1e; }
+                QWidget { color: #d4d4d4; font-size: 12px; }
+                QScrollArea { border: none; background-color: #252526; }
+                QGroupBox {
+                    font-weight: bold; color: #4fc3f7; border: 1px solid #3c3c3c;
+                    border-radius: 6px; margin-top: 15px; padding-top: 10px;
+                }
+                QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }
+                QPushButton {
+                    background-color: #333333; border: 1px solid #454545; color: #ffffff;
+                    padding: 6px; border-radius: 4px;
+                }
+                QPushButton:hover { background-color: #454545; border-color: #007acc; }
+                QPushButton:disabled { color: #777777; background-color: #252525; }
+                QLineEdit, QComboBox {
+                    background-color: #1e1e1e; border: 1px solid #3c3c3c;
+                    color: #ffffff; padding: 4px; border-radius: 3px;
+                }
+                QListWidget {
+                    background-color: #1e1e1e; color: #d4d4d4;
+                    border: 1px solid #3c3c3c; border-radius: 4px;
+                }
+                QListWidget::item:selected { background-color: #0e639c; color: #ffffff; }
+                QCheckBox { spacing: 6px; }
+                QScrollBar:vertical { background: #252526; width: 12px; }
+                QScrollBar::handle:vertical { background: #555555; border-radius: 5px; min-height: 24px; }
+            """)
         else:
-            self.setStyleSheet("QMainWindow { background-color: #f3f3f3; } QWidget { color: #242424; font-size: 12px; } QScrollArea { border: none; background-color: #ffffff; } QGroupBox { font-weight: bold; color: #005fb8; border: 1px solid #d2d2d2; border-radius: 6px; margin-top: 15px; } QPushButton { background-color: #fbfbfb; border: 1px solid #cccccc; color: #242424; padding: 6px; border-radius: 4px; } QPushButton:hover { background-color: #f5f5f5; border-color: #005fb8; } QLineEdit { background-color: #ffffff; border: 1px solid #cccccc; color: #000000; padding: 4px; } QListWidget { background-color: #ffffff; color: #242424; } QComboBox { background-color: #ffffff; color: #000000; border: 1px solid #cccccc; padding: 2px; }")
+            self.setStyleSheet("""
+                QMainWindow { background-color: #eef2f7; }
+                QWidget { color: #1f2933; font-size: 12px; }
+                QScrollArea { border: none; background-color: #f7f9fc; }
+                QGroupBox {
+                    background-color: #ffffff; font-weight: bold; color: #0b5cad;
+                    border: 1px solid #cfd7e3; border-radius: 6px;
+                    margin-top: 15px; padding-top: 10px;
+                }
+                QGroupBox::title {
+                    subcontrol-origin: margin; left: 10px; padding: 0 4px;
+                    background-color: #ffffff;
+                }
+                QPushButton {
+                    background-color: #ffffff; border: 1px solid #b8c4d4; color: #1f2933;
+                    padding: 6px; border-radius: 4px;
+                }
+                QPushButton:hover { background-color: #edf5ff; border-color: #0b5cad; }
+                QPushButton:pressed { background-color: #dbeafe; }
+                QPushButton:disabled { color: #9aa6b2; background-color: #edf0f4; }
+                QLineEdit, QComboBox {
+                    background-color: #ffffff; border: 1px solid #b8c4d4;
+                    color: #111827; padding: 4px; border-radius: 3px;
+                    selection-background-color: #bfdbfe;
+                }
+                QListWidget {
+                    background-color: #ffffff; color: #1f2933;
+                    border: 1px solid #cfd7e3; border-radius: 4px;
+                    alternate-background-color: #f6f8fb;
+                }
+                QListWidget::item:selected { background-color: #dbeafe; color: #111827; }
+                QCheckBox { spacing: 6px; }
+                QCheckBox::indicator:checked { background-color: #0b5cad; border: 1px solid #0b5cad; }
+                QScrollBar:vertical { background: #f1f5f9; width: 12px; }
+                QScrollBar::handle:vertical { background: #b8c4d4; border-radius: 5px; min-height: 24px; }
+            """)
+        self.apply_theme_widget_overrides(is_dark)
+
+    def apply_theme_widget_overrides(self, is_dark):
+        styles = {
+            "btn_open_file": (
+                "background-color: #37474f; color: white; font-weight: bold; padding: 4px;",
+                "background-color: #e8f1fb; color: #123f68; border: 1px solid #9cb7d5; font-weight: bold; padding: 4px;"
+            ),
+            "chk_enable_inspector": (
+                "color: #ff9800; font-weight: bold;",
+                "color: #9a5b00; font-weight: bold;"
+            ),
+            "btn_snap_zero": (
+                "background-color: #00897b; color: white; font-weight: bold; padding: 6px;",
+                "background-color: #e0f2f1; color: #005f56; border: 1px solid #7bbdb5; font-weight: bold; padding: 6px;"
+            ),
+            "transform_group": (
+                "QGroupBox { border: 1px solid #d32f2f; }",
+                "QGroupBox { background-color: #fff7f7; border: 1px solid #e2a8a8; color: #8a1f1f; }"
+            ),
+            "lbl_status_calc": (
+                "color: #4fc3f7; font-size: 11px;",
+                "color: #0b5cad; font-size: 11px;"
+            ),
+            "btn_apply_auto_scale": (
+                "background-color: #007acc; color: white; font-weight: bold; padding: 6px;",
+                "background-color: #0b5cad; color: white; border: 1px solid #084b8d; font-weight: bold; padding: 6px;"
+            ),
+            "btn_export_new_dxf": (
+                "background-color: #2e7d32; color: white; font-weight: bold; padding: 6px;",
+                "background-color: #2e7d32; color: white; border: 1px solid #1f5d23; font-weight: bold; padding: 6px;"
+            ),
+            "btn_create_group": (
+                "background-color: #673ab7; color: white; font-weight: bold;",
+                "background-color: #ede7f6; color: #4527a0; border: 1px solid #b39ddb; font-weight: bold;"
+            ),
+            "btn_delete_from_dxf": (
+                "background-color: #d32f2f; color: white; font-weight: bold;",
+                "background-color: #fde8e8; color: #9b1c1c; border: 1px solid #f3aaaa; font-weight: bold;"
+            ),
+        }
+        for attr_name, (dark_style, light_style) in styles.items():
+            widget = getattr(self, attr_name, None)
+            if widget is not None:
+                widget.setStyleSheet(dark_style if is_dark else light_style)
 
     def on_scene_item_clicked(self, handle):
         modifiers = QGuiApplication.keyboardModifiers()
@@ -2470,7 +2960,8 @@ class MiniCAD(QMainWindow):
                 text = f"🌙 Дуга (ID: {hndl}) Центр X:{cx:.1f}, Y:{cy:.1f}, R:{r:.1f}"
             elif tp == "TEXT":
                 x, y, _ = entity.dxf.insert
-                text = f"Текст (ID: {hndl}) \"{entity.dxf.text}\" X:{x:.1f}, Y:{y:.1f}, H:{entity.dxf.height:.1f}"
+                label = entity.dxf.text.strip() or "[рамка тексту]"
+                text = f"Текст (ID: {hndl}) \"{label}\" X:{x:.1f}, Y:{y:.1f}, H:{entity.dxf.height:.1f}"
             else: continue
             item = QListWidgetItem(text)
             item.setData(Qt.ItemDataRole.UserRole, hndl)
@@ -2563,21 +3054,43 @@ class MiniCAD(QMainWindow):
 
             elif tp == "TEXT":
                 settings = self.get_text_settings()
-                x, y, _ = entity.dxf.insert
-                display_text = entity.dxf.text or "[текст]"
+                display_text = self.text_display_value(settings.get("text", entity.dxf.text))
                 if settings.get("handle") == hndl:
-                    pyqt_item = DraggableDoorTextItem(display_text, self)
-                    pyqt_item.setDefaultTextColor(QColor(0, 120, 255))
+                    box_x = float(settings.get("x", 0.0))
+                    box_y = float(settings.get("y", 0.0))
+                    box_w = self.text_box_width(settings)
+                    box_h = self.text_box_height(settings)
+                    pyqt_item = DraggableDoorTextBoxItem(
+                        0,
+                        0,
+                        box_w,
+                        box_h,
+                        self,
+                        hndl
+                    )
+                    pyqt_item.setPos(box_x, -box_y - box_h)
+                    pyqt_item.setBrush(QBrush(QColor(0, 120, 255, 55)))
+                    pyqt_item.setPen(QPen(QColor(0, 120, 255), 1.5, Qt.PenStyle.DashLine))
+                    pyqt_item.setTransformOriginPoint(box_w * 0.5, box_h * 0.5)
+                    pyqt_item.setRotation(-float(settings.get("rotation", 0.0)))
                     self.scene.addItem(pyqt_item)
+                    self.add_centered_text_preview(
+                        pyqt_item,
+                        display_text,
+                        box_w,
+                        box_h,
+                        str(settings.get("font", "STANDARD"))
+                    )
                 else:
+                    x, y, _ = entity.dxf.insert
+                    display_text = entity.dxf.text.strip()
                     pyqt_item = self.scene.addText(display_text)
                     pyqt_item.setDefaultTextColor(QColor(0, 120, 255) if hndl in self.selected_handles else base_line_color)
-                font = pyqt_item.font()
-                font.setPointSizeF(max(float(entity.dxf.height), 1.0))
-                pyqt_item.setFont(font)
-                pyqt_item.setPos(x, -y - float(entity.dxf.height))
-                pyqt_item.setRotation(-float(getattr(entity.dxf, "rotation", 0.0)))
-                if settings.get("handle") != hndl:
+                    font = pyqt_item.font()
+                    font.setPointSizeF(max(float(entity.dxf.height), 1.0))
+                    pyqt_item.setFont(font)
+                    pyqt_item.setPos(x, -y - float(entity.dxf.height))
+                    pyqt_item.setRotation(-float(getattr(entity.dxf, "rotation", 0.0)))
                     pyqt_item.setFlag(QGraphicsEllipseItem.GraphicsItemFlag.ItemIsSelectable, False)
                     pyqt_item.mousePressEvent = lambda event, h=hndl: self.on_scene_item_clicked(h)
                 pyqt_item.setData(Qt.ItemDataRole.UserRole, hndl)
@@ -2610,16 +3123,25 @@ class MiniCAD(QMainWindow):
 
         settings = self.get_text_settings()
         if settings.get("enabled") and not settings.get("handle"):
-            display_text = str(settings.get("text", "")).strip() or "[текст]"
-            text_item = DraggableDoorTextItem(display_text, self)
-            font = text_item.font()
-            font.setPointSizeF(max(float(settings.get("height", 30.0)), 1.0))
-            text_item.setFont(font)
-            text_item.setDefaultTextColor(QColor(0, 120, 255))
-            text_item.setOpacity(0.75)
-            text_item.setPos(float(settings.get("x", 0.0)), -float(settings.get("y", 0.0)) - float(settings.get("height", 30.0)))
-            text_item.setRotation(-float(settings.get("rotation", 0.0)))
-            self.scene.addItem(text_item)
+            box_x = float(settings.get("x", 0.0))
+            box_y = float(settings.get("y", 0.0))
+            box_w = self.text_box_width(settings)
+            box_h = self.text_box_height(settings)
+            box_item = DraggableDoorTextBoxItem(0, 0, box_w, box_h, self)
+            box_item.setPos(box_x, -box_y - box_h)
+            box_item.setBrush(QBrush(QColor(0, 120, 255, 55)))
+            box_item.setPen(QPen(QColor(0, 120, 255), 1.5, Qt.PenStyle.DashLine))
+            box_item.setTransformOriginPoint(box_w * 0.5, box_h * 0.5)
+            box_item.setRotation(-float(settings.get("rotation", 0.0)))
+            self.scene.addItem(box_item)
+            display_text = self.text_display_value(settings.get("text", ""))
+            self.add_centered_text_preview(
+                box_item,
+                display_text,
+                box_w,
+                box_h,
+                str(settings.get("font", "STANDARD"))
+            )
 
         self.view.setSceneRect(self.scene.itemsBoundingRect())
 

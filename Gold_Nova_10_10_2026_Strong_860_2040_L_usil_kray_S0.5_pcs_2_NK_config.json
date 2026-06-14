@@ -6,17 +6,17 @@
         "target_height": null,
         "keep_blocks": [],
         "delete_blocks": [],
-        "door_opening": "left",
+        "door_opening": "right",
         "door_text": {
-            "enabled": false,
-            "text": "",
-            "x": 0.0,
-            "y": 0.0,
+            "enabled": true,
+            "text": "34луквпд",
+            "x": 67.97,
+            "y": -328.03,
             "height": 30.0,
-            "width_factor": 1.0,
+            "width_factor": 100.0,
             "rotation": 0.0,
             "font": "STANDARD",
-            "handle": null
+            "handle": "C0"
         }
     },
     "groups": []

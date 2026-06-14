@@ -1,0 +1,23 @@
+{
+    "meta": {
+        "source_width": 1984.0,
+        "source_height": 118.96007008800001,
+        "target_width": null,
+        "target_height": null,
+        "keep_blocks": [],
+        "delete_blocks": [],
+        "door_opening": "left",
+        "door_text": {
+            "enabled": false,
+            "text": "",
+            "x": 1984.0,
+            "y": 0.0,
+            "height": 30.0,
+            "width_factor": 120.0,
+            "rotation": 180.0,
+            "font": "Calibri Light",
+            "handle": null
+        }
+    },
+    "groups": []
+}

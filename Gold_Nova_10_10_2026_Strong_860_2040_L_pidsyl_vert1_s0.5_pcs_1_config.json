@@ -1,0 +1,23 @@
+{
+    "meta": {
+        "source_width": 608.6,
+        "source_height": 226.360070088,
+        "target_width": null,
+        "target_height": null,
+        "keep_blocks": [],
+        "delete_blocks": [],
+        "door_opening": "right",
+        "door_text": {
+            "enabled": false,
+            "text": "",
+            "x": 289.19,
+            "y": 68.14,
+            "height": 30.0,
+            "width_factor": 120.0,
+            "rotation": 0.0,
+            "font": "Candara",
+            "handle": null
+        }
+    },
+    "groups": []
+}
