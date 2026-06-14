@@ -1,0 +1,23 @@
+{
+    "meta": {
+        "source_width": 303.790809167,
+        "source_height": 767.0,
+        "target_width": null,
+        "target_height": null,
+        "keep_blocks": [],
+        "delete_blocks": [],
+        "door_opening": "left",
+        "door_text": {
+            "enabled": false,
+            "text": "",
+            "x": 0.0,
+            "y": 0.0,
+            "height": 30.0,
+            "width_factor": 1.0,
+            "rotation": 0.0,
+            "font": "STANDARD",
+            "handle": null
+        }
+    },
+    "groups": []
+}

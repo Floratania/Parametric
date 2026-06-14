@@ -8,5 +8,6 @@ dist/
 *.zip
 * – копія*
 
-
+venv
+.venv
 drawing.DXF

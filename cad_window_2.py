@@ -3,6 +3,10 @@ import sys
 import math
 import copy
 import json
+import csv
+import re
+import zipfile
+import xml.etree.ElementTree as ET
 
 import ezdxf
 import ezdxf.bbox as dxf_bbox
@@ -14,7 +18,7 @@ from PySide6.QtWidgets import (
     QListWidget, QListWidgetItem, QPushButton, QCheckBox,
     QGroupBox, QGraphicsRectItem, QComboBox, QLineEdit, QGraphicsView, 
     QGraphicsScene, QAbstractItemView, QGraphicsEllipseItem, QInputDialog, QFileDialog,
-    QGridLayout
+    QGridLayout, QGraphicsTextItem, QGraphicsItem
 )
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QColor, QBrush, QPen, QPainterPath, QPainter, QGuiApplication
@@ -99,15 +103,27 @@ def format_factor(val):
     return f"{val*100:g}%"
 
 
+class DraggableDoorTextItem(QGraphicsTextItem):
+    def __init__(self, text, owner):
+        super().__init__(text)
+        self.owner = owner
+        self.setFlags(
+            QGraphicsItem.GraphicsItemFlag.ItemIsMovable |
+            QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+        )
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        self.owner.on_door_text_item_moved(self)
+
+
 # --- МОДУЛЬ ПАРАМЕТРИЧНОГО РУХУ ---
 class ParametricEngine:
     @staticmethod
     def get_transform(delta_w, delta_h, group):
-        # Визначаємо, яка дельта (ΔW чи ΔH) керує локальними вісями X та Y
         val_x = delta_w if "W" in group.get("link_x", "W") else delta_h
         val_y = delta_h if "H" in group.get("link_y", "H") else delta_w
 
-        # Розраховуємо ЛОКАЛЬНЕ зміщення та ріст
         shift_x = val_x * group.get("k_w", 0.0)
         growth_x = val_x * group.get("growth_p_w", 0.0)
         
@@ -134,9 +150,32 @@ class MiniCAD(QMainWindow):
         self.is_loading_history = False
 
         self.parametric_groups = [] 
+        self.project_meta = {
+            "source_width": None,
+            "source_height": None,
+            "target_width": None,
+            "target_height": None,
+            "keep_blocks": [],
+            "delete_blocks": [],
+            "door_opening": "left",
+            "door_text": {
+                "enabled": False,
+                "text": "",
+                "x": 0.0,
+                "y": 0.0,
+                "height": 30.0,
+                "width_factor": 1.0,
+                "rotation": 0.0,
+                "font": "STANDARD",
+                "handle": None
+            }
+        }
+        self.block_keep_state = {}
 
         self.zones_undo_stack = []
         self.zones_redo_stack = []
+        self.global_recalc_undo_stack = []
+        self.global_recalc_redo_stack = []
 
         self.coord_tooltip_item = None
         self.coord_snap_marker = None
@@ -149,6 +188,7 @@ class MiniCAD(QMainWindow):
         self.save_zones_history_state()
 
         self.init_ui()
+        self.update_dimension_inputs_from_meta()
         self.set_interface_theme(self.current_theme)
         self.save_original_geometries()
         self.update_viewer()
@@ -173,19 +213,64 @@ class MiniCAD(QMainWindow):
                 self.doc = ezdxf.new()
                 self.doc.saveas(self.dxf_path)
 
+    def get_project_config_path(self):
+        base_path = os.path.splitext(self.dxf_path)[0]
+        return f"{base_path}_config.json"
+
+    def default_project_meta(self):
+        return {
+            "source_width": None,
+            "source_height": None,
+            "target_width": None,
+            "target_height": None,
+            "keep_blocks": [],
+            "delete_blocks": [],
+            "door_opening": "left",
+            "door_text": self.default_text_settings()
+        }
+
+    def default_text_settings(self):
+        return {
+            "enabled": False,
+            "text": "",
+            "x": 0.0,
+            "y": 0.0,
+            "height": 30.0,
+            "width_factor": 1.0,
+            "rotation": 0.0,
+            "font": "STANDARD",
+            "handle": None
+        }
+
+    def get_group_key(self, group):
+        if not group.get("uid"):
+            handles_key = ",".join(sorted(str(h) for h in group.get("handles", [])))
+            group["uid"] = f"{group.get('name', 'group')}|{handles_key}"
+        return group["uid"]
+
     def load_project_config(self):
         # Динамічно формуємо ім'я JSON-файлу на основі імені поточного DXF
-        base_path = os.path.splitext(self.dxf_path)[0]
-        config_path = f"{base_path}_config.json"
+        config_path = self.get_project_config_path()
         
         self.parametric_groups.clear()
+        self.project_meta = self.default_project_meta()
+        self.block_keep_state = {}
         
         if os.path.exists(config_path):
             try:
                 with open(config_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
+                    raw_data = json.load(f)
+                    if isinstance(raw_data, dict):
+                        self.project_meta.update(raw_data.get("meta", {}))
+                        text_settings = self.default_text_settings()
+                        text_settings.update(self.project_meta.get("door_text", {}))
+                        self.project_meta["door_text"] = text_settings
+                        data = raw_data.get("groups", [])
+                    else:
+                        data = raw_data
                     for g in data:
                         g["handles"] = set(g.get("handles", []))
+                        self.get_group_key(g)
                         
                         # Міграція зі старих версій
                         if "k_x" in g:
@@ -217,16 +302,35 @@ class MiniCAD(QMainWindow):
             except Exception as e:
                 print(f"Помилка завантаження конфігурації JSON: {e}")
 
+        keep_names = self.project_meta.get("keep_blocks", [])
+        delete_names = self.project_meta.get("delete_blocks", [])
+        for group in self.parametric_groups:
+            name = group.get("name", "")
+            key = self.get_group_key(group)
+            if keep_names:
+                self.block_keep_state[key] = key in keep_names or name in keep_names
+            elif delete_names:
+                self.block_keep_state[key] = not (key in delete_names or name in delete_names)
+            else:
+                self.block_keep_state[key] = True
+
     def save_project_config(self):
         # Динамічно формуємо ім'я JSON-файлу на основі імені поточного DXF
-        base_path = os.path.splitext(self.dxf_path)[0]
-        config_path = f"{base_path}_config.json"
+        config_path = self.get_project_config_path()
         
-        data = []
+        groups_data = []
         for g in self.parametric_groups:
+            self.get_group_key(g)
             g_data = g.copy()
             g_data["handles"] = list(g["handles"])
-            data.append(g_data)
+            groups_data.append(g_data)
+        self.project_meta["keep_blocks"] = [
+            name for name, keep in self.block_keep_state.items() if keep
+        ]
+        self.project_meta["delete_blocks"] = [
+            name for name, keep in self.block_keep_state.items() if not keep
+        ]
+        data = {"meta": self.project_meta, "groups": groups_data}
         try:
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4, ensure_ascii=False)
@@ -351,14 +455,118 @@ class MiniCAD(QMainWindow):
         self.btn_apply_auto_scale.clicked.connect(self.process_parametric_percentage_scale)
         auto_scale_box.addWidget(self.btn_apply_auto_scale)
 
+        preview_buttons = QHBoxLayout()
+        self.btn_preview_scale = QPushButton("Перегляд")
+        self.btn_preview_scale.clicked.connect(self.preview_parametric_scale)
+        preview_buttons.addWidget(self.btn_preview_scale)
+
+        self.btn_restore_current = QPushButton("Повернути базу")
+        self.btn_restore_current.clicked.connect(self.restore_current_dxf_from_disk)
+        preview_buttons.addWidget(self.btn_restore_current)
+        auto_scale_box.addLayout(preview_buttons)
+
+        workflow_buttons = QHBoxLayout()
+        self.btn_remember_source_size = QPushButton("Запам'ятати початкові")
+        self.btn_remember_source_size.clicked.connect(self.remember_source_dimensions)
+        workflow_buttons.addWidget(self.btn_remember_source_size)
+
+        self.btn_import_params = QPushButton("Excel/CSV параметри")
+        self.btn_import_params.clicked.connect(self.import_parameters_from_table)
+        workflow_buttons.addWidget(self.btn_import_params)
+
+        self.btn_order_wizard = QPushButton("Нове замовлення")
+        self.btn_order_wizard.clicked.connect(self.quick_order_wizard)
+        workflow_buttons.addWidget(self.btn_order_wizard)
+        auto_scale_box.addLayout(workflow_buttons)
+
+        self.btn_export_new_dxf = QPushButton("Створити новий DXF")
+        self.btn_export_new_dxf.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold; padding: 6px;")
+        self.btn_export_new_dxf.clicked.connect(self.export_new_dxf_with_dimensions)
+        auto_scale_box.addWidget(self.btn_export_new_dxf)
+
+        self.btn_batch_export = QPushButton("Пакет з Excel/CSV")
+        self.btn_batch_export.clicked.connect(self.batch_export_from_table)
+        auto_scale_box.addWidget(self.btn_batch_export)
+
+        self.btn_find_min_size = QPushButton("Мінімум без накладання")
+        self.btn_find_min_size.clicked.connect(self.find_minimum_safe_size)
+        auto_scale_box.addWidget(self.btn_find_min_size)
+
         auto_scale_group.setLayout(auto_scale_box)
         control_panel_layout.addWidget(auto_scale_group)
 
+        opening_group = QGroupBox("Відкривання")
+        opening_box = QHBoxLayout()
+        self.combo_door_opening = QComboBox()
+        self.combo_door_opening.addItems(["Ліве", "Праве"])
+        self.combo_door_opening.currentTextChanged.connect(self.on_door_opening_changed)
+        opening_box.addWidget(self.combo_door_opening)
+        self.btn_mirror_opening = QPushButton("Змінити L/R")
+        self.btn_mirror_opening.clicked.connect(self.mirror_door_opening)
+        opening_box.addWidget(self.btn_mirror_opening)
+        opening_group.setLayout(opening_box)
+        control_panel_layout.addWidget(opening_group)
+
+        text_group = QGroupBox("Текст на дверях")
+        text_box = QGridLayout()
+        self.check_door_text_enabled = QCheckBox("Додати текст")
+        self.check_door_text_enabled.stateChanged.connect(self.on_text_settings_changed)
+        text_box.addWidget(self.check_door_text_enabled, 0, 0, 1, 2)
+
+        text_box.addWidget(QLabel("Текст:"), 1, 0)
+        self.input_door_text = QLineEdit()
+        self.input_door_text.textChanged.connect(self.on_text_settings_changed)
+        text_box.addWidget(self.input_door_text, 1, 1, 1, 3)
+
+        text_box.addWidget(QLabel("X:"), 2, 0)
+        self.input_text_x = QLineEdit("0")
+        self.input_text_x.textChanged.connect(self.on_text_settings_changed)
+        text_box.addWidget(self.input_text_x, 2, 1)
+
+        text_box.addWidget(QLabel("Y:"), 2, 2)
+        self.input_text_y = QLineEdit("0")
+        self.input_text_y.textChanged.connect(self.on_text_settings_changed)
+        text_box.addWidget(self.input_text_y, 2, 3)
+
+        text_box.addWidget(QLabel("Висота:"), 3, 0)
+        self.input_text_height = QLineEdit("30")
+        self.input_text_height.textChanged.connect(self.on_text_settings_changed)
+        text_box.addWidget(self.input_text_height, 3, 1)
+
+        text_box.addWidget(QLabel("Ширина:"), 3, 2)
+        self.input_text_width_factor = QLineEdit("1")
+        self.input_text_width_factor.textChanged.connect(self.on_text_settings_changed)
+        text_box.addWidget(self.input_text_width_factor, 3, 3)
+
+        text_box.addWidget(QLabel("Поворот:"), 4, 0)
+        self.input_text_rotation = QLineEdit("0")
+        self.input_text_rotation.textChanged.connect(self.on_text_settings_changed)
+        text_box.addWidget(self.input_text_rotation, 4, 1)
+
+        text_box.addWidget(QLabel("Шрифт:"), 4, 2)
+        self.combo_text_font = QComboBox()
+        self.combo_text_font.setEditable(True)
+        self.combo_text_font.addItems(["STANDARD", "Arial", "Arial Narrow", "Simplex"])
+        self.combo_text_font.currentTextChanged.connect(self.on_text_settings_changed)
+        text_box.addWidget(self.combo_text_font, 4, 3)
+
+        self.btn_place_door_text = QPushButton("Показати/поставити блок")
+        self.btn_place_door_text.clicked.connect(self.place_empty_door_text_block)
+        text_box.addWidget(self.btn_place_door_text, 5, 0, 1, 4)
+
+        self.btn_apply_door_text = QPushButton("Оновити текст")
+        self.btn_apply_door_text.clicked.connect(self.apply_door_text_from_ui)
+        text_box.addWidget(self.btn_apply_door_text, 6, 0, 1, 4)
+        text_group.setLayout(text_box)
+        control_panel_layout.addWidget(text_group)
+        self.sync_text_inputs_from_meta()
+        self.sync_opening_inputs_from_meta()
+
         history_group = QGroupBox("Конструкторська історія")
         history_box = QHBoxLayout()
-        self.btn_undo = QPushButton("Скасувати")
+        self.btn_undo = QPushButton("Назад")
         self.btn_undo.clicked.connect(self.undo)
-        self.btn_redo = QPushButton("Повторити")
+        self.btn_redo = QPushButton("Вперед")
         self.btn_redo.clicked.connect(self.redo)
         history_box.addWidget(self.btn_undo)
         history_box.addWidget(self.btn_redo)
@@ -367,7 +575,7 @@ class MiniCAD(QMainWindow):
 
         group_constructor_group = QGroupBox("🛠️ Параметричні групи топології")
         group_box = QVBoxLayout()
-        
+
         self.btn_create_group = QPushButton("🧩 Створити параметричну групу")
         self.btn_create_group.setStyleSheet("background-color: #673ab7; color: white; font-weight: bold;")
         self.btn_create_group.clicked.connect(self.create_parametric_group)
@@ -391,6 +599,12 @@ class MiniCAD(QMainWindow):
         self.group_list_widget.setFixedHeight(100)
         self.group_list_widget.itemSelectionChanged.connect(self.on_group_selection_changed)
         group_box.addWidget(self.group_list_widget)
+
+        group_box.addWidget(QLabel("<b>Блоки для нового DXF (галочка = лишити):</b>"))
+        self.block_filter_list = QListWidget()
+        self.block_filter_list.setFixedHeight(95)
+        self.block_filter_list.itemChanged.connect(self.on_block_keep_state_changed)
+        group_box.addWidget(self.block_filter_list)
 
         # --- ГІБРИДНА СІТКА НАЛАШТУВАНЬ ГРУПИ (РОЗДІЛЕНІ ОСІ X та Y) ---
         group_box.addWidget(QLabel("<b>⚙️ Параметри трансформації:</b>"))
@@ -452,6 +666,15 @@ class MiniCAD(QMainWindow):
 
         group_box.addLayout(grid)
 
+        rule_layout = QHBoxLayout()
+        self.combo_rule_library = QComboBox()
+        self.combo_rule_library.addItems(list(self.typical_rule_library().keys()))
+        rule_layout.addWidget(self.combo_rule_library)
+        self.btn_apply_rule = QPushButton("Застосувати правило")
+        self.btn_apply_rule.clicked.connect(self.apply_selected_rule_to_group)
+        rule_layout.addWidget(self.btn_apply_rule)
+        group_box.addLayout(rule_layout)
+
         # Підключення сигналів сітки
         self.combo_link_x.currentTextChanged.connect(self.on_link_x_changed)
         self.combo_link_y.currentTextChanged.connect(self.on_link_y_changed)
@@ -487,6 +710,918 @@ class MiniCAD(QMainWindow):
         control_panel_layout.addStretch()
         self.update_history_buttons_state()
 
+    def typical_rule_library(self):
+        return {
+            "Фіксовано": {
+                "k_w": 0.0, "k_h": 0.0,
+                "growth_p_w": 0.0, "growth_p_h": 0.0,
+                "growth_dir_x": "Центр", "growth_dir_y": "Центр",
+                "link_x": "X = W", "link_y": "Y = H"
+            },
+            "Рухається вправо": {
+                "k_w": 1.0, "k_h": 0.0,
+                "growth_p_w": 0.0, "growth_p_h": 0.0,
+                "growth_dir_x": "Центр", "growth_dir_y": "Центр",
+                "link_x": "X = W", "link_y": "Y = H"
+            },
+            "Рухається вгору": {
+                "k_w": 0.0, "k_h": 1.0,
+                "growth_p_w": 0.0, "growth_p_h": 0.0,
+                "growth_dir_x": "Центр", "growth_dir_y": "Центр",
+                "link_x": "X = W", "link_y": "Y = H"
+            },
+            "Центрувати по ширині": {
+                "k_w": 0.5, "k_h": 0.0,
+                "growth_p_w": 0.0, "growth_p_h": 0.0,
+                "growth_dir_x": "Центр", "growth_dir_y": "Центр",
+                "link_x": "X = W", "link_y": "Y = H"
+            },
+            "Центрувати по висоті": {
+                "k_w": 0.0, "k_h": 0.5,
+                "growth_p_w": 0.0, "growth_p_h": 0.0,
+                "growth_dir_x": "Центр", "growth_dir_y": "Центр",
+                "link_x": "X = W", "link_y": "Y = H"
+            },
+            "Розтягнути вправо": {
+                "k_w": 0.0, "k_h": 0.0,
+                "growth_p_w": 1.0, "growth_p_h": 0.0,
+                "growth_dir_x": "Вправо", "growth_dir_y": "Центр",
+                "link_x": "X = W", "link_y": "Y = H"
+            },
+            "Розтягнути вгору": {
+                "k_w": 0.0, "k_h": 0.0,
+                "growth_p_w": 0.0, "growth_p_h": 1.0,
+                "growth_dir_x": "Центр", "growth_dir_y": "Вгору",
+                "link_x": "X = W", "link_y": "Y = H"
+            },
+            "Правий край + ріст вгору": {
+                "k_w": 1.0, "k_h": 0.0,
+                "growth_p_w": 0.0, "growth_p_h": 1.0,
+                "growth_dir_x": "Центр", "growth_dir_y": "Вгору",
+                "link_x": "X = W", "link_y": "Y = H"
+            },
+            "Верхній край + ріст вправо": {
+                "k_w": 0.0, "k_h": 1.0,
+                "growth_p_w": 1.0, "growth_p_h": 0.0,
+                "growth_dir_x": "Вправо", "growth_dir_y": "Центр",
+                "link_x": "X = W", "link_y": "Y = H"
+            }
+        }
+
+    def apply_rule_to_group(self, group, rule_name):
+        rule = self.typical_rule_library().get(rule_name)
+        if not rule:
+            return
+        group.update(rule)
+
+    def apply_selected_rule_to_group(self):
+        selected = self.group_list_widget.selectedItems()
+        if not selected:
+            return
+        self.record_action_snapshot()
+        idx = selected[0].data(Qt.ItemDataRole.UserRole)
+        self.apply_rule_to_group(self.parametric_groups[idx], self.combo_rule_library.currentText())
+        self.save_project_config()
+        self.on_group_selection_changed()
+        self.update_viewer()
+
+    def parse_numeric_text(self, value):
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        text = text.replace(",", ".")
+        match = re.search(r"-?\d+(?:\.\d+)?", text)
+        return float(match.group(0)) if match else None
+
+    def format_dimension_value(self, value):
+        if value is None:
+            return ""
+        value = float(value)
+        return str(int(value)) if abs(value - int(value)) < 0.001 else f"{value:.2f}".rstrip("0").rstrip(".")
+
+    def get_dxf_bounds_dimensions(self):
+        min_x, max_x = float("inf"), float("-inf")
+        min_y, max_y = float("inf"), float("-inf")
+        for entity in self.doc.modelspace():
+            tp = entity.dxftype()
+            if tp in ("CIRCLE", "ARC"):
+                cx, cy, _ = entity.dxf.center
+                r = entity.dxf.radius
+                min_x = min(min_x, cx - r)
+                max_x = max(max_x, cx + r)
+                min_y = min(min_y, cy - r)
+                max_y = max(max_y, cy + r)
+            elif tp == "LINE":
+                x1, y1, _ = entity.dxf.start
+                x2, y2, _ = entity.dxf.end
+                min_x = min(min_x, x1, x2)
+                max_x = max(max_x, x1, x2)
+                min_y = min(min_y, y1, y2)
+                max_y = max(max_y, y1, y2)
+        if min_x == float("inf") or min_y == float("inf"):
+            return None, None
+        return max_x - min_x, max_y - min_y
+
+    def update_dimension_inputs_from_meta(self):
+        source_w = self.project_meta.get("source_width")
+        source_h = self.project_meta.get("source_height")
+        if source_w is None or source_h is None:
+            source_w, source_h = self.get_dxf_bounds_dimensions()
+            self.project_meta["source_width"] = source_w
+            self.project_meta["source_height"] = source_h
+
+        target_w = self.project_meta.get("target_width", source_w)
+        target_h = self.project_meta.get("target_height", source_h)
+
+        self.input_current_width.setText(self.format_dimension_value(source_w))
+        self.input_current_height.setText(self.format_dimension_value(source_h))
+        self.input_target_width.setText(self.format_dimension_value(target_w))
+        self.input_target_height.setText(self.format_dimension_value(target_h))
+        self.sync_text_inputs_from_meta()
+        self.sync_opening_inputs_from_meta()
+
+    def remember_source_dimensions(self):
+        source_w = self.parse_numeric_text(self.input_current_width.text())
+        source_h = self.parse_numeric_text(self.input_current_height.text())
+        if source_w is None or source_h is None:
+            source_w, source_h = self.get_dxf_bounds_dimensions()
+        self.project_meta["source_width"] = source_w
+        self.project_meta["source_height"] = source_h
+        self.project_meta["target_width"] = self.parse_numeric_text(self.input_target_width.text())
+        self.project_meta["target_height"] = self.parse_numeric_text(self.input_target_height.text())
+        self.save_project_config()
+        self.update_dimension_inputs_from_meta()
+        self.lbl_status_calc.setText("<font color='#a5d6a7'>Початкові розміри збережено.</font>")
+
+    def load_block_filter_list(self):
+        if not hasattr(self, "block_filter_list"):
+            return
+        self.block_filter_list.blockSignals(True)
+        self.block_filter_list.clear()
+        valid_names = set()
+        for group in self.parametric_groups:
+            name = group.get("name", "")
+            key = self.get_group_key(group)
+            valid_names.add(key)
+            keep = self.block_keep_state.get(key, True)
+            self.block_keep_state[key] = keep
+            item = QListWidgetItem(f"{name} ({len(group['handles'])} об.)")
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked if keep else Qt.CheckState.Unchecked)
+            item.setData(Qt.ItemDataRole.UserRole, key)
+            self.block_filter_list.addItem(item)
+        for key in list(self.block_keep_state):
+            if key not in valid_names:
+                del self.block_keep_state[key]
+        self.block_filter_list.blockSignals(False)
+
+    def on_block_keep_state_changed(self, item):
+        self.record_action_snapshot()
+        key = item.data(Qt.ItemDataRole.UserRole)
+        self.block_keep_state[key] = item.checkState() == Qt.CheckState.Checked
+        self.save_project_config()
+
+    def get_text_settings(self):
+        settings = self.default_text_settings()
+        settings.update(self.project_meta.get("door_text", {}))
+        self.project_meta["door_text"] = settings
+        return settings
+
+    def sync_text_inputs_from_meta(self):
+        if not hasattr(self, "input_door_text"):
+            return
+        settings = self.get_text_settings()
+        widgets = [
+            self.check_door_text_enabled,
+            self.input_door_text,
+            self.input_text_x,
+            self.input_text_y,
+            self.input_text_height,
+            self.input_text_width_factor,
+            self.input_text_rotation,
+            self.combo_text_font
+        ]
+        for widget in widgets:
+            widget.blockSignals(True)
+        self.check_door_text_enabled.setChecked(bool(settings.get("enabled")))
+        self.input_door_text.setText(str(settings.get("text", "")))
+        self.input_text_x.setText(self.format_dimension_value(settings.get("x", 0.0)))
+        self.input_text_y.setText(self.format_dimension_value(settings.get("y", 0.0)))
+        self.input_text_height.setText(self.format_dimension_value(settings.get("height", 30.0)))
+        self.input_text_width_factor.setText(self.format_dimension_value(settings.get("width_factor", 1.0)))
+        self.input_text_rotation.setText(self.format_dimension_value(settings.get("rotation", 0.0)))
+        self.combo_text_font.setCurrentText(str(settings.get("font", "STANDARD")))
+        for widget in widgets:
+            widget.blockSignals(False)
+
+    def collect_text_settings_from_inputs(self):
+        if not hasattr(self, "input_door_text"):
+            return self.get_text_settings()
+        settings = self.get_text_settings()
+        settings["enabled"] = self.check_door_text_enabled.isChecked()
+        settings["text"] = self.input_door_text.text()
+        for key, widget, fallback in (
+            ("x", self.input_text_x, 0.0),
+            ("y", self.input_text_y, 0.0),
+            ("height", self.input_text_height, 30.0),
+            ("width_factor", self.input_text_width_factor, 1.0),
+            ("rotation", self.input_text_rotation, 0.0),
+        ):
+            value = self.parse_numeric_text(widget.text())
+            settings[key] = fallback if value is None else value
+        settings["font"] = self.combo_text_font.currentText().strip() or "STANDARD"
+        self.project_meta["door_text"] = settings
+        return settings
+
+    def on_text_settings_changed(self, *args):
+        self.collect_text_settings_from_inputs()
+        self.save_project_config()
+
+    def apply_door_text_from_ui(self):
+        self.record_action_snapshot()
+        self.collect_text_settings_from_inputs()
+        self.apply_door_text_to_doc()
+        self.doc.saveas(self.dxf_path)
+        self.save_project_config()
+        self.save_original_geometries()
+        self.load_entities_into_list()
+        self.update_viewer()
+        self.lbl_status_calc.setText("<font color='#a5d6a7'>Текст оновлено на DXF.</font>")
+
+    def place_empty_door_text_block(self):
+        self.record_action_snapshot()
+        settings = self.collect_text_settings_from_inputs()
+        settings["enabled"] = True
+        if not str(settings.get("text", "")).strip():
+            settings["text"] = ""
+        if settings.get("x", 0.0) == 0.0 and settings.get("y", 0.0) == 0.0:
+            min_x, min_y, max_x, max_y = self.get_dxf_bounds()
+            if min_x is not None:
+                settings["x"] = min_x + (max_x - min_x) * 0.5
+                settings["y"] = min_y + (max_y - min_y) * 0.5
+        self.project_meta["door_text"] = settings
+        self.sync_text_inputs_from_meta()
+        self.save_project_config()
+        self.update_viewer()
+        self.lbl_status_calc.setText("<font color='#4fc3f7'>Текстовий блок можна перетягнути мишкою.</font>")
+
+    def on_door_text_item_moved(self, item):
+        self.record_action_snapshot()
+        settings = self.get_text_settings()
+        settings["x"] = float(item.pos().x())
+        settings["y"] = float(-item.pos().y() - float(settings.get("height", 30.0)))
+        settings["enabled"] = True
+        self.project_meta["door_text"] = settings
+        handle = settings.get("handle")
+        if handle and handle in self.doc.entitydb:
+            self.doc.entitydb[handle].dxf.insert = (settings["x"], settings["y"], 0.0)
+            self.doc.saveas(self.dxf_path)
+        self.sync_text_inputs_from_meta()
+        self.save_project_config()
+        self.load_entities_into_list()
+
+    def sync_opening_inputs_from_meta(self):
+        if not hasattr(self, "combo_door_opening"):
+            return
+        opening = self.project_meta.get("door_opening", "left")
+        self.combo_door_opening.blockSignals(True)
+        self.combo_door_opening.setCurrentText("Праве" if opening == "right" else "Ліве")
+        self.combo_door_opening.blockSignals(False)
+
+    def on_door_opening_changed(self, text):
+        self.record_action_snapshot()
+        self.project_meta["door_opening"] = "right" if "Прав" in text else "left"
+        self.save_project_config()
+
+    def get_dxf_bounds(self, doc=None):
+        doc = doc or self.doc
+        min_x, min_y = float("inf"), float("inf")
+        max_x, max_y = float("-inf"), float("-inf")
+        for entity in doc.modelspace():
+            tp = entity.dxftype()
+            if tp in ("CIRCLE", "ARC"):
+                cx, cy, _ = entity.dxf.center
+                r = entity.dxf.radius
+                min_x = min(min_x, cx - r)
+                max_x = max(max_x, cx + r)
+                min_y = min(min_y, cy - r)
+                max_y = max(max_y, cy + r)
+            elif tp == "LINE":
+                x1, y1, _ = entity.dxf.start
+                x2, y2, _ = entity.dxf.end
+                min_x = min(min_x, x1, x2)
+                max_x = max(max_x, x1, x2)
+                min_y = min(min_y, y1, y2)
+                max_y = max(max_y, y1, y2)
+            elif tp == "TEXT":
+                x, y, _ = entity.dxf.insert
+                h = float(entity.dxf.height)
+                w = max(len(str(entity.dxf.text)), 1) * h * 0.6 * float(getattr(entity.dxf, "width", 1.0))
+                min_x = min(min_x, x)
+                max_x = max(max_x, x + w)
+                min_y = min(min_y, y)
+                max_y = max(max_y, y + h)
+        if min_x == float("inf"):
+            return None, None, None, None
+        return min_x, min_y, max_x, max_y
+
+    def mirror_door_opening(self):
+        min_x, min_y, max_x, max_y = self.get_dxf_bounds()
+        if min_x is None:
+            return
+        self.record_action_snapshot()
+        axis_x = (min_x + max_x) * 0.5
+        for entity in self.doc.modelspace():
+            tp = entity.dxftype()
+            if tp == "LINE":
+                sx, sy, sz = entity.dxf.start
+                ex, ey, ez = entity.dxf.end
+                entity.dxf.start = (2 * axis_x - sx, sy, sz)
+                entity.dxf.end = (2 * axis_x - ex, ey, ez)
+            elif tp in ("CIRCLE", "ARC"):
+                cx, cy, cz = entity.dxf.center
+                entity.dxf.center = (2 * axis_x - cx, cy, cz)
+                if tp == "ARC":
+                    old_start = float(entity.dxf.start_angle)
+                    old_end = float(entity.dxf.end_angle)
+                    entity.dxf.start_angle = (180.0 - old_end) % 360.0
+                    entity.dxf.end_angle = (180.0 - old_start) % 360.0
+            elif tp == "TEXT":
+                x, y, z = entity.dxf.insert
+                entity.dxf.insert = (2 * axis_x - x, y, z)
+                entity.dxf.rotation = (180.0 - float(getattr(entity.dxf, "rotation", 0.0))) % 360.0
+        settings = self.get_text_settings()
+        settings["x"] = 2 * axis_x - float(settings.get("x", 0.0))
+        settings["rotation"] = (180.0 - float(settings.get("rotation", 0.0))) % 360.0
+        self.project_meta["door_text"] = settings
+        self.project_meta["door_opening"] = "right" if self.project_meta.get("door_opening") != "right" else "left"
+        self.doc.saveas(self.dxf_path)
+        self.save_original_geometries()
+        self.save_project_config()
+        self.sync_opening_inputs_from_meta()
+        self.sync_text_inputs_from_meta()
+        self.load_entities_into_list()
+        self.update_viewer()
+        self.lbl_status_calc.setText("<font color='#a5d6a7'>Відкривання дзеркально змінено.</font>")
+
+    def group_original_bbox(self, group):
+        min_x, min_y = float("inf"), float("inf")
+        max_x, max_y = float("-inf"), float("-inf")
+        for handle in group.get("handles", set()):
+            orig = self.original_geometries.get(handle)
+            if not orig:
+                continue
+            if orig["type"] in ("CIRCLE", "ARC"):
+                cx, cy, _ = orig["center"]
+                r = orig["radius"]
+                min_x = min(min_x, cx - r)
+                max_x = max(max_x, cx + r)
+                min_y = min(min_y, cy - r)
+                max_y = max(max_y, cy + r)
+            elif orig["type"] == "LINE":
+                sx, sy, _ = orig["start"]
+                ex, ey, _ = orig["end"]
+                min_x = min(min_x, sx, ex)
+                max_x = max(max_x, sx, ex)
+                min_y = min(min_y, sy, ey)
+                max_y = max(max_y, sy, ey)
+        if min_x == float("inf"):
+            return None
+        return (min_x, min_y, max_x, max_y)
+
+    def simulated_group_bbox(self, group, cur_w, cur_h, target_w, target_h):
+        bbox = self.group_original_bbox(group)
+        if not bbox:
+            return None
+        min_x, min_y, max_x, max_y = bbox
+        delta_w = target_w - cur_w
+        delta_h = target_h - cur_h
+        shift_v, growth_v = ParametricEngine.get_transform(delta_w, delta_h, group)
+        min_x += shift_v[0]
+        max_x += shift_v[0]
+        min_y += shift_v[1]
+        max_y += shift_v[1]
+
+        if group.get("growth_dir_x", "Центр") == "Вправо":
+            max_x += growth_v[0]
+        elif group.get("growth_dir_x", "Центр") == "Вліво":
+            min_x -= growth_v[0]
+        else:
+            min_x -= growth_v[0] * 0.5
+            max_x += growth_v[0] * 0.5
+
+        if group.get("growth_dir_y", "Центр") == "Вгору":
+            max_y += growth_v[1]
+        elif group.get("growth_dir_y", "Центр") == "Вниз":
+            min_y -= growth_v[1]
+        else:
+            min_y -= growth_v[1] * 0.5
+            max_y += growth_v[1] * 0.5
+
+        return (min(min_x, max_x), min(min_y, max_y), max(min_x, max_x), max(min_y, max_y))
+
+    def bboxes_overlap(self, a, b, gap=0.5):
+        return not (
+            a[2] <= b[0] + gap or
+            b[2] <= a[0] + gap or
+            a[3] <= b[1] + gap or
+            b[3] <= a[1] + gap
+        )
+
+    def has_new_group_overlap(self, cur_w, cur_h, target_w, target_h):
+        groups = [g for g in self.parametric_groups if self.group_original_bbox(g)]
+        if len(groups) < 2:
+            return False
+        original_bboxes = [self.group_original_bbox(g) for g in groups]
+        simulated_bboxes = [self.simulated_group_bbox(g, cur_w, cur_h, target_w, target_h) for g in groups]
+        for i in range(len(groups)):
+            for j in range(i + 1, len(groups)):
+                if self.bboxes_overlap(original_bboxes[i], original_bboxes[j]):
+                    continue
+                if simulated_bboxes[i] and simulated_bboxes[j] and self.bboxes_overlap(simulated_bboxes[i], simulated_bboxes[j]):
+                    return True
+        return False
+
+    def find_min_safe_axis(self, cur_w, cur_h, axis):
+        if axis == "width":
+            if not self.has_new_group_overlap(cur_w, cur_h, 1.0, cur_h):
+                return 1.0
+            low, high = 1.0, cur_w
+            for _ in range(32):
+                mid = (low + high) * 0.5
+                if self.has_new_group_overlap(cur_w, cur_h, mid, cur_h):
+                    low = mid
+                else:
+                    high = mid
+            return high
+        if not self.has_new_group_overlap(cur_w, cur_h, cur_w, 1.0):
+            return 1.0
+        low, high = 1.0, cur_h
+        for _ in range(32):
+            mid = (low + high) * 0.5
+            if self.has_new_group_overlap(cur_w, cur_h, cur_w, mid):
+                low = mid
+            else:
+                high = mid
+        return high
+
+    def find_minimum_safe_size(self):
+        try:
+            cur_w = float(self.input_current_width.text().strip())
+            cur_h = float(self.input_current_height.text().strip())
+        except ValueError:
+            self.lbl_status_calc.setText("<font color='red'>Спочатку задайте початкову ширину і висоту.</font>")
+            return
+        if len(self.parametric_groups) < 2:
+            self.lbl_status_calc.setText("<font color='red'>Потрібно мінімум дві параметричні групи для перевірки накладання.</font>")
+            return
+        min_w = self.find_min_safe_axis(cur_w, cur_h, "width")
+        min_h = self.find_min_safe_axis(cur_w, cur_h, "height")
+        self.lbl_status_calc.setText(
+            f"<font color='#4fc3f7'>Мінімум без нового накладання: W≈{min_w:.1f} мм, H≈{min_h:.1f} мм</font>"
+        )
+
+    def get_text_style_name(self, doc, font_name):
+        font = (font_name or "STANDARD").strip()
+        if font.upper() == "STANDARD":
+            return "STANDARD"
+        style_name = "TXT_" + re.sub(r"[^0-9A-Za-z_]+", "_", font.upper()).strip("_")
+        font_files = {
+            "ARIAL": "arial.ttf",
+            "ARIAL NARROW": "arialn.ttf",
+            "SIMPLEX": "simplex.shx"
+        }
+        if style_name not in doc.styles:
+            doc.styles.new(style_name, dxfattribs={"font": font_files.get(font.upper(), font)})
+        return style_name
+
+    def remove_managed_text_entity(self, doc=None, settings=None):
+        doc = doc or self.doc
+        settings = settings or self.get_text_settings()
+        handle = settings.get("handle")
+        if handle and handle in doc.entitydb:
+            try:
+                doc.modelspace().delete_entity(doc.entitydb[handle])
+            except Exception:
+                pass
+        settings["handle"] = None
+
+    def apply_door_text_to_doc(self, doc=None):
+        doc = doc or self.doc
+        settings = self.get_text_settings()
+        self.remove_managed_text_entity(doc, settings)
+        text = str(settings.get("text", "")).strip()
+        if not settings.get("enabled") or not text:
+            return None
+        style_name = self.get_text_style_name(doc, settings.get("font", "STANDARD"))
+        entity = doc.modelspace().add_text(
+            text,
+            dxfattribs={
+                "insert": (float(settings.get("x", 0.0)), float(settings.get("y", 0.0)), 0.0),
+                "height": max(float(settings.get("height", 30.0)), 0.1),
+                "rotation": float(settings.get("rotation", 0.0)),
+                "style": style_name
+            }
+        )
+        entity.dxf.width = max(float(settings.get("width_factor", 1.0)), 0.01)
+        settings["handle"] = entity.dxf.handle
+        self.project_meta["door_text"] = settings
+        return entity
+
+    def normalize_key(self, value):
+        text = str(value).strip().lower()
+        replacements = {
+            "ширина": "target_width",
+            "width": "target_width",
+            "w": "target_width",
+            "нова ширина": "target_width",
+            "target_width": "target_width",
+            "висота": "target_height",
+            "height": "target_height",
+            "h": "target_height",
+            "нова висота": "target_height",
+            "target_height": "target_height",
+            "поточна ширина": "source_width",
+            "source_width": "source_width",
+            "current_width": "source_width",
+            "початкова ширина": "source_width",
+            "поточна висота": "source_height",
+            "source_height": "source_height",
+            "current_height": "source_height",
+            "початкова висота": "source_height",
+            "лишити": "keep_blocks",
+            "keep": "keep_blocks",
+            "keep_blocks": "keep_blocks",
+            "видалити": "delete_blocks",
+            "delete": "delete_blocks",
+            "delete_blocks": "delete_blocks",
+            "текст": "text",
+            "text": "text",
+            "door_text": "text",
+            "текст x": "text_x",
+            "text_x": "text_x",
+            "x_text": "text_x",
+            "текст y": "text_y",
+            "text_y": "text_y",
+            "y_text": "text_y",
+            "розмір шрифту": "font_size",
+            "висота тексту": "font_size",
+            "font_size": "font_size",
+            "text_height": "font_size",
+            "шрифт": "font",
+            "font": "font",
+            "ширина тексту": "text_width",
+            "text_width": "text_width",
+            "width_factor": "text_width",
+            "поворот тексту": "text_rotation",
+            "text_rotation": "text_rotation",
+            "rotation": "text_rotation",
+        }
+        return replacements.get(text, text)
+
+    def read_csv_rows(self, path):
+        for encoding in ("utf-8-sig", "cp1251", "utf-8"):
+            try:
+                with open(path, newline="", encoding=encoding) as f:
+                    return [row for row in csv.reader(f) if any(str(c).strip() for c in row)]
+            except UnicodeDecodeError:
+                continue
+        return []
+
+    def read_xlsx_rows(self, path):
+        ns = {"a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+        with zipfile.ZipFile(path) as zf:
+            shared = []
+            if "xl/sharedStrings.xml" in zf.namelist():
+                root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
+                for si in root.findall("a:si", ns):
+                    shared.append("".join(t.text or "" for t in si.findall(".//a:t", ns)))
+            sheet_name = "xl/worksheets/sheet1.xml"
+            root = ET.fromstring(zf.read(sheet_name))
+            rows = []
+            for row in root.findall(".//a:row", ns):
+                values = []
+                for cell in row.findall("a:c", ns):
+                    raw = cell.find("a:v", ns)
+                    text = raw.text if raw is not None else ""
+                    if cell.attrib.get("t") == "s" and text:
+                        text = shared[int(text)]
+                    values.append(text)
+                if any(str(v).strip() for v in values):
+                    rows.append(values)
+            return rows
+
+    def import_parameters_from_table(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Виберіть Excel/CSV з параметрами",
+            self.project_dir,
+            "Tables (*.xlsx *.csv);;All Files (*)"
+        )
+        if not path:
+            return
+        try:
+            rows = self.read_xlsx_rows(path) if path.lower().endswith(".xlsx") else self.read_csv_rows(path)
+            params = self.extract_table_parameters(rows)
+            self.record_action_snapshot()
+            self.apply_imported_parameters(params)
+            self.lbl_status_calc.setText(f"<font color='#a5d6a7'>Параметри імпортовано: {os.path.basename(path)}</font>")
+        except Exception as e:
+            self.lbl_status_calc.setText(f"<font color='red'>Помилка імпорту: {e}</font>")
+
+    def quick_order_wizard(self):
+        default_text = f"{self.input_target_width.text()}x{self.input_target_height.text()}"
+        text, ok = QInputDialog.getText(
+            self,
+            "Нове замовлення",
+            "Введіть новий розмір W x H:",
+            text=default_text
+        )
+        if not ok:
+            return
+        nums = [float(x.replace(",", ".")) for x in re.findall(r"\d+(?:[,.]\d+)?", text)]
+        if len(nums) < 2:
+            self.lbl_status_calc.setText("<font color='red'>Введіть два числа: ширина і висота.</font>")
+            return
+        if not self.input_current_width.text().strip() or not self.input_current_height.text().strip():
+            self.update_dimension_inputs_from_meta()
+        self.input_target_width.setText(self.format_dimension_value(nums[0]))
+        self.input_target_height.setText(self.format_dimension_value(nums[1]))
+        self.export_new_dxf_with_dimensions()
+
+    def extract_table_parameters(self, rows):
+        params = {}
+        if not rows:
+            return params
+
+        headers = [self.normalize_key(c) for c in rows[0]]
+        if "target_width" in headers or "target_height" in headers:
+            for row in rows[1:]:
+                for idx, key in enumerate(headers):
+                    if idx >= len(row):
+                        continue
+                    value = row[idx]
+                    if key in ("source_width", "source_height", "target_width", "target_height", "text_x", "text_y", "font_size", "text_width", "text_rotation"):
+                        num = self.parse_numeric_text(value)
+                        if num is not None:
+                            params[key] = num
+                    elif key in ("text", "font"):
+                        params[key] = str(value).strip()
+                    elif key in ("keep_blocks", "delete_blocks"):
+                        params.setdefault(key, []).extend(self.split_block_names(value))
+            return params
+
+        for row in rows:
+            if len(row) < 2:
+                continue
+            key = self.normalize_key(row[0])
+            value = row[1]
+            if key in ("source_width", "source_height", "target_width", "target_height", "text_x", "text_y", "font_size", "text_width", "text_rotation"):
+                num = self.parse_numeric_text(value)
+                if num is not None:
+                    params[key] = num
+            elif key in ("text", "font"):
+                params[key] = str(value).strip()
+            elif key in ("keep_blocks", "delete_blocks"):
+                params[key] = self.split_block_names(value)
+        return params
+
+    def split_block_names(self, value):
+        if value is None:
+            return []
+        return [part.strip() for part in re.split(r"[,;\n]+", str(value)) if part.strip()]
+
+    def apply_imported_parameters(self, params):
+        for key in ("source_width", "source_height", "target_width", "target_height"):
+            if key in params:
+                self.project_meta[key] = params[key]
+        text_settings = self.get_text_settings()
+        text_key_map = {
+            "text": "text",
+            "text_x": "x",
+            "text_y": "y",
+            "font_size": "height",
+            "text_width": "width_factor",
+            "text_rotation": "rotation",
+            "font": "font"
+        }
+        for source_key, target_key in text_key_map.items():
+            if source_key in params:
+                text_settings[target_key] = params[source_key]
+        if "text" in params and str(params["text"]).strip():
+            text_settings["enabled"] = True
+        self.project_meta["door_text"] = text_settings
+        if "keep_blocks" in params and params["keep_blocks"]:
+            keep_set = set(params["keep_blocks"])
+            for group in self.parametric_groups:
+                name = group.get("name", "")
+                key = self.get_group_key(group)
+                self.block_keep_state[key] = key in keep_set or name in keep_set
+        if "delete_blocks" in params and params["delete_blocks"]:
+            delete_set = set(params["delete_blocks"])
+            for group in self.parametric_groups:
+                name = group.get("name", "")
+                key = self.get_group_key(group)
+                if key in delete_set or name in delete_set:
+                    self.block_keep_state[key] = False
+        self.update_dimension_inputs_from_meta()
+        self.sync_text_inputs_from_meta()
+        self.load_block_filter_list()
+        self.save_project_config()
+
+    def sanitize_filename_part(self, value):
+        text = self.format_dimension_value(value)
+        return re.sub(r"[^0-9A-Za-zА-Яа-я_\-.]+", "_", text)
+
+    def build_export_path(self, target_w, target_h):
+        base_name = os.path.splitext(os.path.basename(self.dxf_path))[0]
+        base_name = re.sub(r"(?<!\d)\d{3,5}_\d{3,5}(?!\d)", "", base_name).strip("_- ")
+        width_part = self.sanitize_filename_part(target_w)
+        height_part = self.sanitize_filename_part(target_h)
+        name = f"{base_name}_{width_part}_{height_part}.DXF"
+        path = os.path.join(self.project_dir, name)
+        counter = 2
+        while os.path.exists(path):
+            name = f"{base_name}_{width_part}_{height_part}_{counter}.DXF"
+            path = os.path.join(self.project_dir, name)
+            counter += 1
+        return path
+
+    def preview_parametric_scale(self):
+        self.record_action_snapshot()
+        self.process_parametric_percentage_scale(save_result=False, record_history=False)
+        self.lbl_status_calc.setText("<font color='#4fc3f7'>Перегляд застосовано тільки на екрані. Файл ще не збережено.</font>")
+
+    def restore_current_dxf_from_disk(self):
+        if not os.path.exists(self.dxf_path):
+            return
+        self.record_action_snapshot()
+        self.doc = ezdxf.readfile(self.dxf_path)
+        self.save_original_geometries()
+        self.update_dimension_inputs_from_meta()
+        self.update_viewer()
+        self.load_entities_into_list()
+        self.lbl_status_calc.setText("<font color='#a5d6a7'>Повернуто стан з відкритого DXF.</font>")
+
+    def export_new_dxf_with_dimensions(self):
+        self.collect_text_settings_from_inputs()
+        original_bytes = None
+        if os.path.exists(self.dxf_path):
+            with open(self.dxf_path, "rb") as f:
+                original_bytes = f.read()
+        original_meta = copy.deepcopy(self.project_meta)
+        original_groups = copy.deepcopy(self.parametric_groups)
+        original_keep_state = copy.deepcopy(self.block_keep_state)
+
+        self.project_meta["source_width"] = self.parse_numeric_text(self.input_current_width.text())
+        self.project_meta["source_height"] = self.parse_numeric_text(self.input_current_height.text())
+        self.project_meta["target_width"] = self.parse_numeric_text(self.input_target_width.text())
+        self.project_meta["target_height"] = self.parse_numeric_text(self.input_target_height.text())
+        self.is_loading_history = True
+        self.process_parametric_percentage_scale(save_result=True, record_history=False)
+        self.is_loading_history = False
+
+        target_w = self.project_meta.get("target_width")
+        target_h = self.project_meta.get("target_height")
+        export_path = self.build_export_path(target_w, target_h)
+
+        export_doc = copy.deepcopy(self.doc)
+        export_msp = export_doc.modelspace()
+        delete_handles = set()
+        for group in self.parametric_groups:
+            key = self.get_group_key(group)
+            if not self.block_keep_state.get(key, True):
+                delete_handles.update(group.get("handles", set()))
+        for hndl in list(delete_handles):
+            if hndl in export_doc.entitydb:
+                export_msp.delete_entity(export_doc.entitydb[hndl])
+
+        export_doc.saveas(export_path)
+        if original_bytes is not None:
+            with open(self.dxf_path, "wb") as f:
+                f.write(original_bytes)
+            self.doc = ezdxf.readfile(self.dxf_path)
+        self.project_meta = original_meta
+        self.parametric_groups = original_groups
+        self.block_keep_state = original_keep_state
+        self.save_original_geometries()
+        self.save_project_config()
+        self.scan_project_folder_for_dxf()
+        self.update_dimension_inputs_from_meta()
+        self.load_groups_into_list()
+        self.load_entities_into_list()
+        self.update_viewer()
+        self.lbl_status_calc.setText(f"<font color='#a5d6a7'>Створено: {os.path.basename(export_path)}</font>")
+
+    def batch_export_from_table(self):
+        self.collect_text_settings_from_inputs()
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Виберіть Excel/CSV для пакетного створення DXF",
+            self.project_dir,
+            "Tables (*.xlsx *.csv);;All Files (*)"
+        )
+        if not path:
+            return
+
+        original_bytes = None
+        if os.path.exists(self.dxf_path):
+            with open(self.dxf_path, "rb") as f:
+                original_bytes = f.read()
+        original_meta = copy.deepcopy(self.project_meta)
+        original_groups = copy.deepcopy(self.parametric_groups)
+        original_keep_state = copy.deepcopy(self.block_keep_state)
+
+        try:
+            rows = self.read_xlsx_rows(path) if path.lower().endswith(".xlsx") else self.read_csv_rows(path)
+            jobs = self.extract_batch_jobs(rows)
+            created = []
+            for job in jobs:
+                self.project_meta = copy.deepcopy(original_meta)
+                self.parametric_groups = copy.deepcopy(original_groups)
+                self.block_keep_state = copy.deepcopy(original_keep_state)
+                self.apply_imported_parameters(job)
+                self.is_loading_history = True
+                self.process_parametric_percentage_scale(save_result=True, record_history=False)
+                self.is_loading_history = False
+
+                target_w = self.project_meta.get("target_width")
+                target_h = self.project_meta.get("target_height")
+                export_path = self.build_export_path(target_w, target_h)
+                export_doc = copy.deepcopy(self.doc)
+                export_msp = export_doc.modelspace()
+                delete_handles = self.get_export_delete_handles()
+                for hndl in delete_handles:
+                    if hndl in export_doc.entitydb:
+                        export_msp.delete_entity(export_doc.entitydb[hndl])
+                export_doc.saveas(export_path)
+                created.append(os.path.basename(export_path))
+
+                if original_bytes is not None:
+                    with open(self.dxf_path, "wb") as f:
+                        f.write(original_bytes)
+                    self.doc = ezdxf.readfile(self.dxf_path)
+                    self.save_original_geometries()
+
+            self.project_meta = original_meta
+            self.parametric_groups = original_groups
+            self.block_keep_state = original_keep_state
+            self.save_project_config()
+            self.scan_project_folder_for_dxf()
+            self.update_dimension_inputs_from_meta()
+            self.load_groups_into_list()
+            self.load_entities_into_list()
+            self.update_viewer()
+            self.lbl_status_calc.setText(f"<font color='#a5d6a7'>Пакет створено: {len(created)} DXF</font>")
+        except Exception as e:
+            self.lbl_status_calc.setText(f"<font color='red'>Помилка пакета: {e}</font>")
+            if original_bytes is not None:
+                with open(self.dxf_path, "wb") as f:
+                    f.write(original_bytes)
+                self.doc = ezdxf.readfile(self.dxf_path)
+                self.save_original_geometries()
+
+    def extract_batch_jobs(self, rows):
+        if not rows:
+            return []
+        headers = [self.normalize_key(c) for c in rows[0]]
+        jobs = []
+        for row in rows[1:]:
+            params = {}
+            for idx, key in enumerate(headers):
+                if idx >= len(row):
+                    continue
+                value = row[idx]
+                if key in ("source_width", "source_height", "target_width", "target_height", "text_x", "text_y", "font_size", "text_width", "text_rotation"):
+                    num = self.parse_numeric_text(value)
+                    if num is not None:
+                        params[key] = num
+                elif key in ("text", "font"):
+                    text_value = str(value).strip()
+                    if text_value:
+                        params[key] = text_value
+                elif key in ("keep_blocks", "delete_blocks"):
+                    names = self.split_block_names(value)
+                    if names:
+                        params.setdefault(key, []).extend(names)
+            if params:
+                jobs.append(params)
+        if not jobs:
+            single = self.extract_table_parameters(rows)
+            if single:
+                jobs.append(single)
+        return jobs
+
+    def get_export_delete_handles(self):
+        delete_handles = set()
+        for group in self.parametric_groups:
+            key = self.get_group_key(group)
+            if not self.block_keep_state.get(key, True):
+                delete_handles.update(group.get("handles", set()))
+        return delete_handles
+
     def open_dxf_from_dialog(self):
         file_path, _ = QFileDialog.getOpenFileName(
             self,
@@ -506,8 +1641,11 @@ class MiniCAD(QMainWindow):
                 self.parametric_groups.clear()
                 self.zones_undo_stack.clear()
                 self.zones_redo_stack.clear()
+                self.global_recalc_undo_stack.clear()
+                self.global_recalc_redo_stack.clear()
                 
                 self.load_project_config()
+                self.update_dimension_inputs_from_meta()
                 
                 self.history = HistoryManager(self.dxf_path)
                 self.history.save_state()
@@ -518,6 +1656,7 @@ class MiniCAD(QMainWindow):
                 self.update_viewer()
                 self.load_entities_into_list()
                 self.load_groups_into_list()
+                self.load_block_filter_list()
                 self.update_history_buttons_state()
                 
             except Exception as e:
@@ -527,6 +1666,7 @@ class MiniCAD(QMainWindow):
         if not self.selected_handles: return
         selected_entities = [self.doc.entitydb[h] for h in self.selected_handles if h in self.doc.entitydb]
         if not selected_entities: return
+        self.record_action_snapshot()
 
         cx = sum((e.left_x + e.right_x) / 2 for e in selected_entities) / len(selected_entities)
         cy = sum((e.bottom_y + e.top_y) / 2 for e in selected_entities) / len(selected_entities)
@@ -624,37 +1764,41 @@ class MiniCAD(QMainWindow):
         self.load_entities_into_list()
 
     def snap_to_zero(self):
-        min_x, min_y = float('inf'), float('inf')
-        for orig in self.original_geometries.values():
-            if orig["type"] in ("CIRCLE", "ARC"):
-                min_x = min(min_x, orig["center"][0] - orig["radius"])
-                min_y = min(min_y, orig["center"][1] - orig["radius"])
-            elif orig["type"] == "LINE":
-                min_x = min(min_x, orig["start"][0], orig["end"][0])
-                min_y = min(min_y, orig["start"][1], orig["end"][1])
-                
-        if min_x == float('inf') or min_y == float('inf'):
-            return 
-            
+        min_x, min_y, max_x, max_y = self.get_dxf_bounds()
+        if min_x is None or min_y is None:
+            return
+        self.record_action_snapshot()
         shift_x = -min_x
         shift_y = -min_y
-        
-        for orig in self.original_geometries.values():
-            if orig["type"] == "LINE":
-                sz = orig["start"][2] if len(orig["start"]) > 2 else 0
-                ez = orig["end"][2] if len(orig["end"]) > 2 else 0
-                orig["start"] = (orig["start"][0] + shift_x, orig["start"][1] + shift_y, sz)
-                orig["end"] = (orig["end"][0] + shift_x, orig["end"][1] + shift_y, ez)
-            elif orig["type"] in ("CIRCLE", "ARC"):
-                cz = orig["center"][2] if len(orig["center"]) > 2 else 0
-                orig["center"] = (orig["center"][0] + shift_x, orig["center"][1] + shift_y, cz)
 
+        matrix = Matrix44.translate(shift_x, shift_y, 0)
+        for entity in self.doc.modelspace():
+            try:
+                entity.transform(matrix)
+            except Exception:
+                tp = entity.dxftype()
+                if tp == "TEXT":
+                    x, y, z = entity.dxf.insert
+                    entity.dxf.insert = (x + shift_x, y + shift_y, z)
+
+        settings = self.get_text_settings()
+        settings["x"] = float(settings.get("x", 0.0)) + shift_x
+        settings["y"] = float(settings.get("y", 0.0)) + shift_y
+        self.project_meta["door_text"] = settings
+
+        self.doc.saveas(self.dxf_path)
+        self.save_original_geometries()
+        self.save_project_config()
         self.push_to_history()
-        self.process_parametric_percentage_scale()
+        self.sync_text_inputs_from_meta()
+        self.load_entities_into_list()
+        self.update_viewer()
+        self.lbl_status_calc.setText("<font color='#a5d6a7'>Фігуру притиснуто до (0,0).</font>")
 
     def delete_entities_from_dxf(self):
         if not self.selected_handles:
             return
+        self.record_action_snapshot()
 
         msp = self.doc.modelspace()
         handles_to_delete = list(self.selected_handles)
@@ -739,10 +1883,15 @@ class MiniCAD(QMainWindow):
     def create_parametric_group(self):
         if len(self.selected_handles) < 1:
             return  
-            
-        name, ok = QInputDialog.getText(self, "Нова група", "Введіть назву групи:")
+
+        name, ok = QInputDialog.getText(
+            self,
+            "Нова група",
+            "Введіть назву групи:"
+        )
         if not ok or not name.strip():
             name = f"Група {len(self.parametric_groups) + 1}"
+        self.record_action_snapshot()
 
         for group in self.parametric_groups:
             group["handles"].difference_update(self.selected_handles)
@@ -760,7 +1909,9 @@ class MiniCAD(QMainWindow):
             "link_x": "X = W",
             "link_y": "Y = H"
         }
+        self.get_group_key(new_group)
         self.parametric_groups.append(new_group)
+        self.block_keep_state[new_group["uid"]] = True
         self.clear_selection()
         self.push_to_history()
         self.save_project_config()
@@ -770,6 +1921,7 @@ class MiniCAD(QMainWindow):
     def disband_parametric_group(self):
         selected = self.group_list_widget.selectedItems()
         if not selected: return
+        self.record_action_snapshot()
         idx = selected[0].data(Qt.ItemDataRole.UserRole)
         del self.parametric_groups[idx]
         self.clear_selection()
@@ -781,6 +1933,7 @@ class MiniCAD(QMainWindow):
     def remove_selected_from_group(self):
         selected_group_item = self.group_list_widget.currentItem()
         if not selected_group_item or not self.selected_handles: return
+        self.record_action_snapshot()
         
         idx = selected_group_item.data(Qt.ItemDataRole.UserRole)
         group = self.parametric_groups[idx]
@@ -805,6 +1958,7 @@ class MiniCAD(QMainWindow):
             item.setData(Qt.ItemDataRole.UserRole, idx)
             self.group_list_widget.addItem(item)
         self.group_list_widget.blockSignals(False)
+        self.load_block_filter_list()
 
     def on_group_selection_changed(self):
         selected = self.group_list_widget.selectedItems()
@@ -848,6 +2002,7 @@ class MiniCAD(QMainWindow):
     def on_combo_k_w_changed(self, text):
         selected = self.group_list_widget.selectedItems()
         if not selected: return
+        self.record_action_snapshot()
         idx = selected[0].data(Qt.ItemDataRole.UserRole)
         self.parametric_groups[idx]["k_w"] = parse_factor(text)
         self.save_project_config()
@@ -855,6 +2010,7 @@ class MiniCAD(QMainWindow):
     def on_combo_k_h_changed(self, text):
         selected = self.group_list_widget.selectedItems()
         if not selected: return
+        self.record_action_snapshot()
         idx = selected[0].data(Qt.ItemDataRole.UserRole)
         self.parametric_groups[idx]["k_h"] = parse_factor(text)
         self.save_project_config()
@@ -862,6 +2018,7 @@ class MiniCAD(QMainWindow):
     def on_combo_growth_p_w_changed(self, text):
         selected = self.group_list_widget.selectedItems()
         if not selected: return
+        self.record_action_snapshot()
         idx = selected[0].data(Qt.ItemDataRole.UserRole)
         self.parametric_groups[idx]["growth_p_w"] = parse_factor(text)
         self.save_project_config()
@@ -869,6 +2026,7 @@ class MiniCAD(QMainWindow):
     def on_combo_growth_p_h_changed(self, text):
         selected = self.group_list_widget.selectedItems()
         if not selected: return
+        self.record_action_snapshot()
         idx = selected[0].data(Qt.ItemDataRole.UserRole)
         self.parametric_groups[idx]["growth_p_h"] = parse_factor(text)
         self.save_project_config()
@@ -876,6 +2034,7 @@ class MiniCAD(QMainWindow):
     def on_link_x_changed(self, text):
         selected = self.group_list_widget.selectedItems()
         if not selected: return
+        self.record_action_snapshot()
         idx = selected[0].data(Qt.ItemDataRole.UserRole)
         self.parametric_groups[idx]["link_x"] = text
         self.save_project_config()
@@ -883,6 +2042,7 @@ class MiniCAD(QMainWindow):
     def on_link_y_changed(self, text):
         selected = self.group_list_widget.selectedItems()
         if not selected: return
+        self.record_action_snapshot()
         idx = selected[0].data(Qt.ItemDataRole.UserRole)
         self.parametric_groups[idx]["link_y"] = text
         self.save_project_config()
@@ -890,6 +2050,7 @@ class MiniCAD(QMainWindow):
     def on_growth_dir_x_changed(self, text):
         selected = self.group_list_widget.selectedItems()
         if not selected: return
+        self.record_action_snapshot()
         idx = selected[0].data(Qt.ItemDataRole.UserRole)
         self.parametric_groups[idx]["growth_dir_x"] = text
         self.save_project_config()
@@ -897,11 +2058,12 @@ class MiniCAD(QMainWindow):
     def on_growth_dir_y_changed(self, text):
         selected = self.group_list_widget.selectedItems()
         if not selected: return
+        self.record_action_snapshot()
         idx = selected[0].data(Qt.ItemDataRole.UserRole)
         self.parametric_groups[idx]["growth_dir_y"] = text
         self.save_project_config()
 
-    def process_parametric_percentage_scale(self):
+    def process_parametric_percentage_scale(self, save_result=True, record_history=True):
         try:
             cur_w = float(self.input_current_width.text().strip())
             target_w = float(self.input_target_width.text().strip())
@@ -910,8 +2072,25 @@ class MiniCAD(QMainWindow):
         except ValueError:
             return
 
+        self.collect_text_settings_from_inputs()
+        should_record = save_result and record_history and not self.is_loading_history
+        if should_record:
+            before_snapshot = self.capture_full_state_snapshot()
+            self.history.save_state()
+            self.history.clear_redo()
+            self.save_zones_history_state()
+            self.zones_redo_stack.clear()
+            self.global_recalc_undo_stack.append(before_snapshot)
+            self.global_recalc_redo_stack.clear()
+            if len(self.global_recalc_undo_stack) > 30:
+                self.global_recalc_undo_stack.pop(0)
+
         delta_w = target_w - cur_w
         delta_h = target_h - cur_h
+        self.project_meta["source_width"] = cur_w
+        self.project_meta["source_height"] = cur_h
+        self.project_meta["target_width"] = target_w
+        self.project_meta["target_height"] = target_h
 
         for hndl, orig in self.original_geometries.items():
             if hndl not in self.doc.entitydb: continue
@@ -995,7 +2174,15 @@ class MiniCAD(QMainWindow):
                 entity.dxf.radius = new_r
 
         self.lbl_status_calc.setText(f"<font color='#a5d6a7'>ΔW={delta_w:+.1f} мм | ΔH={delta_h:+.1f} мм</font>")
-        self.doc.saveas(self.dxf_path)
+        self.apply_door_text_to_doc()
+        if save_result:
+            self.doc.saveas(self.dxf_path)
+        self.save_project_config()
+        if should_record:
+            self.history.save_state()
+            self.save_zones_history_state()
+            self.global_recalc_redo_stack.clear()
+            self.update_history_buttons_state()
         self.update_viewer()
 
     def save_original_geometries(self):
@@ -1012,10 +2199,43 @@ class MiniCAD(QMainWindow):
 
     def save_zones_history_state(self):
         state_snapshot = {
-            "parametric_groups": copy.deepcopy(self.parametric_groups)
+            "parametric_groups": copy.deepcopy(self.parametric_groups),
+            "project_meta": copy.deepcopy(self.project_meta),
+            "block_keep_state": copy.deepcopy(self.block_keep_state)
         }
         self.zones_undo_stack.append(state_snapshot)
         if len(self.zones_undo_stack) > 30: self.zones_undo_stack.pop(0)
+
+    def capture_full_state_snapshot(self):
+        return {
+            "doc": copy.deepcopy(self.doc),
+            "parametric_groups": copy.deepcopy(self.parametric_groups),
+            "project_meta": copy.deepcopy(self.project_meta),
+            "block_keep_state": copy.deepcopy(self.block_keep_state)
+        }
+
+    def record_action_snapshot(self):
+        if self.is_loading_history:
+            return
+        self.global_recalc_undo_stack.append(self.capture_full_state_snapshot())
+        if len(self.global_recalc_undo_stack) > 50:
+            self.global_recalc_undo_stack.pop(0)
+        self.global_recalc_redo_stack.clear()
+        self.update_history_buttons_state()
+
+    def restore_full_state_snapshot(self, snapshot):
+        self.doc = copy.deepcopy(snapshot["doc"])
+        self.parametric_groups = copy.deepcopy(snapshot["parametric_groups"])
+        self.project_meta = copy.deepcopy(snapshot["project_meta"])
+        self.block_keep_state = copy.deepcopy(snapshot["block_keep_state"])
+        self.doc.saveas(self.dxf_path)
+        self.save_project_config()
+        self.save_original_geometries()
+        self.update_dimension_inputs_from_meta()
+        self.load_groups_into_list()
+        self.load_entities_into_list()
+        self.update_viewer()
+        self.update_history_buttons_state()
 
     def push_to_history(self):
         self.history.save_state()
@@ -1073,6 +2293,35 @@ class MiniCAD(QMainWindow):
             self.save_project_config()
             self.reload_after_history_change()
 
+    def restore_state_snapshot(self, snapshot):
+        self.parametric_groups = copy.deepcopy(snapshot["parametric_groups"])
+        self.project_meta = copy.deepcopy(snapshot.get("project_meta", self.project_meta))
+        self.block_keep_state = copy.deepcopy(snapshot.get("block_keep_state", self.block_keep_state))
+        self.save_project_config()
+        self.reload_after_history_change()
+
+    def undo(self):
+        if self.global_recalc_undo_stack:
+            self.global_recalc_redo_stack.append(self.capture_full_state_snapshot())
+            snapshot = self.global_recalc_undo_stack.pop()
+            self.restore_full_state_snapshot(snapshot)
+            return
+        if self.history.undo() and len(self.zones_undo_stack) > 1:
+            current_snapshot = self.zones_undo_stack.pop()
+            self.zones_redo_stack.append(current_snapshot)
+            self.restore_state_snapshot(self.zones_undo_stack[-1])
+
+    def redo(self):
+        if self.global_recalc_redo_stack:
+            self.global_recalc_undo_stack.append(self.capture_full_state_snapshot())
+            snapshot = self.global_recalc_redo_stack.pop()
+            self.restore_full_state_snapshot(snapshot)
+            return
+        if self.history.redo() and self.zones_redo_stack:
+            next_snapshot = self.zones_redo_stack.pop()
+            self.zones_undo_stack.append(next_snapshot)
+            self.restore_state_snapshot(next_snapshot)
+
     def set_interface_theme(self, theme_name):
         if theme_name == "Темна":
             self.setStyleSheet("QMainWindow { background-color: #1e1e1e; padding: 10 px;} QWidget { color: #d4d4d4; font-size: 12px; padding: 12 px;} QScrollArea { border: none; background-color: #252526; } QGroupBox { font-weight: bold; color: #007acc; border: 1px solid #3c3c3c; border-radius: 6px; margin-top: 15px; } QPushButton { background-color: #333333; border: 1px solid #454545; color: #ffffff; padding: 6px; border-radius: 4px; } QPushButton:hover { background-color: #454545; border-color: #007acc; } QLineEdit { background-color: #1e1e1e; border: 1px solid #3c3c3c; color: #ffffff; padding: 4px; } QListWidget { background-color: #1e1e1e; color: #d4d4d4; } QComboBox { background-color: #1e1e1e; color: #ffffff; border: 1px solid #3c3c3c; padding: 2px; }")
@@ -1089,14 +2338,16 @@ class MiniCAD(QMainWindow):
         self.update_viewer()
 
     def update_history_buttons_state(self):
-        self.btn_undo.setEnabled(len(self.history.undo_stack) > 1 and len(self.zones_undo_stack) > 1)
-        self.btn_redo.setEnabled(len(self.history.redo_stack) > 0 and len(self.zones_redo_stack) > 0)
+        can_undo_history = len(self.history.undo_stack) > 1 and len(self.zones_undo_stack) > 1
+        can_redo_history = len(self.history.redo_stack) > 0 and len(self.zones_redo_stack) > 0
+        self.btn_undo.setEnabled(bool(self.global_recalc_undo_stack) or can_undo_history)
+        self.btn_redo.setEnabled(bool(self.global_recalc_redo_stack) or can_redo_history)
 
     def reload_after_history_change(self):
         self.is_loading_history = True
         self.doc = ezdxf.readfile(self.dxf_path)
         self.save_original_geometries()
-        self.process_parametric_percentage_scale()
+        self.update_dimension_inputs_from_meta()
         self.load_groups_into_list()
         self.load_entities_into_list()
         self.update_history_buttons_state()
@@ -1140,15 +2391,19 @@ class MiniCAD(QMainWindow):
                     except Exception as e: print(f"Помилка злиття: {e}")
 
         self.load_project_config()
+        self.update_dimension_inputs_from_meta()
         self.history = HistoryManager(self.dxf_path)
         self.history.save_state()
         self.zones_undo_stack.clear()
         self.zones_redo_stack.clear()
+        self.global_recalc_undo_stack.clear()
+        self.global_recalc_redo_stack.clear()
         self.save_zones_history_state()
         self.save_original_geometries()
         self.update_viewer()
         self.load_entities_into_list()
         self.load_groups_into_list()
+        self.load_block_filter_list()
         self.update_history_buttons_state()
 
     def process_manual_rubber_band(self, rect):
@@ -1213,6 +2468,9 @@ class MiniCAD(QMainWindow):
                 if (round(cx, 1), round(cy, 1), round(r, 1)) in seen: continue
                 seen.add((round(cx, 1), round(cy, 1), round(r, 1)))
                 text = f"🌙 Дуга (ID: {hndl}) Центр X:{cx:.1f}, Y:{cy:.1f}, R:{r:.1f}"
+            elif tp == "TEXT":
+                x, y, _ = entity.dxf.insert
+                text = f"Текст (ID: {hndl}) \"{entity.dxf.text}\" X:{x:.1f}, Y:{y:.1f}, H:{entity.dxf.height:.1f}"
             else: continue
             item = QListWidgetItem(text)
             item.setData(Qt.ItemDataRole.UserRole, hndl)
@@ -1303,6 +2561,29 @@ class MiniCAD(QMainWindow):
                     entity
                 )
 
+            elif tp == "TEXT":
+                settings = self.get_text_settings()
+                x, y, _ = entity.dxf.insert
+                display_text = entity.dxf.text or "[текст]"
+                if settings.get("handle") == hndl:
+                    pyqt_item = DraggableDoorTextItem(display_text, self)
+                    pyqt_item.setDefaultTextColor(QColor(0, 120, 255))
+                    self.scene.addItem(pyqt_item)
+                else:
+                    pyqt_item = self.scene.addText(display_text)
+                    pyqt_item.setDefaultTextColor(QColor(0, 120, 255) if hndl in self.selected_handles else base_line_color)
+                font = pyqt_item.font()
+                font.setPointSizeF(max(float(entity.dxf.height), 1.0))
+                pyqt_item.setFont(font)
+                pyqt_item.setPos(x, -y - float(entity.dxf.height))
+                pyqt_item.setRotation(-float(getattr(entity.dxf, "rotation", 0.0)))
+                if settings.get("handle") != hndl:
+                    pyqt_item.setFlag(QGraphicsEllipseItem.GraphicsItemFlag.ItemIsSelectable, False)
+                    pyqt_item.mousePressEvent = lambda event, h=hndl: self.on_scene_item_clicked(h)
+                pyqt_item.setData(Qt.ItemDataRole.UserRole, hndl)
+                self.overlay_items[hndl] = pyqt_item
+                continue
+
             if pyqt_item:
                 pyqt_item.setFlag(QGraphicsEllipseItem.GraphicsItemFlag.ItemIsSelectable, False)
                 pyqt_item.mousePressEvent = lambda event, h=hndl: self.on_scene_item_clicked(h)
@@ -1313,7 +2594,11 @@ class MiniCAD(QMainWindow):
                     in_group = False
                     for group in self.parametric_groups:
                         if hndl in group["handles"]:
-                            pen_style = QPen(QColor(103, 58, 183), 2) 
+                            group_key = self.get_group_key(group)
+                            if self.block_keep_state.get(group_key, True):
+                                pen_style = QPen(QColor(76, 175, 80), 2)
+                            else:
+                                pen_style = QPen(QColor(211, 47, 47), 2)
                             in_group = True
                             break
                     if not in_group: pen_style = QPen(base_line_color, 1.5)
@@ -1322,6 +2607,19 @@ class MiniCAD(QMainWindow):
                 pyqt_item.setData(Qt.ItemDataRole.UserRole, hndl)
                 self.scene.addItem(pyqt_item)
                 self.overlay_items[hndl] = pyqt_item
+
+        settings = self.get_text_settings()
+        if settings.get("enabled") and not settings.get("handle"):
+            display_text = str(settings.get("text", "")).strip() or "[текст]"
+            text_item = DraggableDoorTextItem(display_text, self)
+            font = text_item.font()
+            font.setPointSizeF(max(float(settings.get("height", 30.0)), 1.0))
+            text_item.setFont(font)
+            text_item.setDefaultTextColor(QColor(0, 120, 255))
+            text_item.setOpacity(0.75)
+            text_item.setPos(float(settings.get("x", 0.0)), -float(settings.get("y", 0.0)) - float(settings.get("height", 30.0)))
+            text_item.setRotation(-float(settings.get("rotation", 0.0)))
+            self.scene.addItem(text_item)
 
         self.view.setSceneRect(self.scene.itemsBoundingRect())
 
