@@ -1,0 +1,44 @@
+{
+    "meta": {
+        "source_width": 947.4401051320003,
+        "source_height": 1752.0,
+        "target_width": null,
+        "target_height": null,
+        "keep_blocks": [
+            "1|14F,150,16A,16B"
+        ],
+        "delete_blocks": [],
+        "door_opening": "left",
+        "door_text": {
+            "enabled": false,
+            "text": "",
+            "x": 0.0,
+            "y": 0.0,
+            "height": 30.0,
+            "width_factor": 120.0,
+            "rotation": 0.0,
+            "font": "STANDARD",
+            "handle": null
+        }
+    },
+    "groups": [
+        {
+            "name": "1",
+            "handles": [
+                "14F",
+                "16B",
+                "16A",
+                "150"
+            ],
+            "k_w": 0.0,
+            "k_h": 0.0,
+            "growth_p_w": 0.0,
+            "growth_p_h": 0.0,
+            "growth_dir_x": "Центр",
+            "growth_dir_y": "Центр",
+            "link_x": "X = W",
+            "link_y": "Y = H",
+            "uid": "1|14F,150,16A,16B"
+        }
+    ]
+}

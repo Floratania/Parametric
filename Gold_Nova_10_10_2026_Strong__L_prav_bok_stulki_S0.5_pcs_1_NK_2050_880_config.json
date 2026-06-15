@@ -1,0 +1,102 @@
+{
+    "meta": {
+        "source_width": 2060.000000000001,
+        "source_height": 178.96007008800098,
+        "target_width": 2060.000000000001,
+        "target_height": 200.0,
+        "keep_blocks": [
+            "1|9A,9E",
+            "2|97,98,99"
+        ],
+        "delete_blocks": [],
+        "door_opening": "left",
+        "door_text": {
+            "enabled": false,
+            "text": "",
+            "x": 0.0,
+            "y": 0.0,
+            "height": 30.0,
+            "width_factor": 120.0,
+            "rotation": 0.0,
+            "font": "Arial",
+            "handle": null
+        }
+    },
+    "groups": [
+        {
+            "name": "1",
+            "handles": [
+                "9E",
+                "9A"
+            ],
+            "k_w": 0.0,
+            "k_h": 0.0,
+            "growth_p_w": 1.0,
+            "growth_p_h": 0.0,
+            "growth_dir_x": "Вліво",
+            "growth_dir_y": "Центр",
+            "link_x": "X = W",
+            "link_y": "Y = H",
+            "uid": "1|9A,9E",
+            "role_y": "manual",
+            "auto_rule": false,
+            "touch_y_enabled": false,
+            "touch_to_uid": null,
+            "touch_gap_y": 0.0,
+            "shift_dir_x": "Вправо",
+            "shift_dir_y": "Вниз",
+            "auto_chain_x": true,
+            "chain_shift_x": 0.0,
+            "chain_growth_own_x": 0.0,
+            "chain_growth_after_x": 0.0,
+            "side_y_chain": "center",
+            "auto_chain_y": true,
+            "auto_chain_y_mode": "side_levels_center",
+            "chain_shift_y": 0.0,
+            "chain_growth_own_y": 0.0,
+            "chain_level_growth_y": 0.0,
+            "side_x": "center",
+            "auto_chain_x_mode": "side_sum_center",
+            "side_sum_left_x": 0.0,
+            "side_sum_right_x": 0.0
+        },
+        {
+            "name": "2",
+            "handles": [
+                "98",
+                "99",
+                "97"
+            ],
+            "k_w": 0.0,
+            "k_h": 0.0,
+            "growth_p_w": 0.0,
+            "growth_p_h": 0.0,
+            "growth_dir_x": "Вліво",
+            "growth_dir_y": "Вниз",
+            "link_x": "X = W",
+            "link_y": "Y = H",
+            "uid": "2|97,98,99",
+            "role_y": "manual",
+            "auto_rule": false,
+            "touch_y_enabled": false,
+            "touch_to_uid": null,
+            "touch_gap_y": 0.0,
+            "shift_dir_x": "Вліво",
+            "shift_dir_y": "Вниз",
+            "auto_chain_x": true,
+            "chain_shift_x": 0.0,
+            "chain_growth_own_x": 0.0,
+            "chain_growth_after_x": 0.0,
+            "side_y_chain": "left",
+            "auto_chain_y": true,
+            "auto_chain_y_mode": "side_levels",
+            "chain_shift_y": 0.0,
+            "chain_growth_own_y": 0.0,
+            "chain_level_growth_y": 0.0,
+            "chain_growth_after_y": 0.0,
+            "side_x": "left",
+            "auto_chain_x_mode": "side_sum",
+            "side_sum_x": 0.0
+        }
+    ]
+}
