@@ -13,8 +13,8 @@
         "door_text": {
             "enabled": false,
             "text": "",
-            "x": 464.77994743399995,
-            "y": -464.77994743399904,
+            "x": 0.0,
+            "y": 0.0,
             "height": 30.0,
             "width_factor": 120.0,
             "rotation": 0.0,

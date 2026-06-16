@@ -2,20 +2,23 @@
     "meta": {
         "source_width": 2040.0,
         "source_height": 860.0,
-        "target_width": 2060.000000000001,
+        "target_width": 2060.0,
         "target_height": 200.0,
         "keep_blocks": [],
         "delete_blocks": [],
         "door_opening": "left",
+        "source_door_opening": "left",
+        "target_door_opening": "left",
+        "growth_axis": "both",
         "door_text": {
             "enabled": false,
             "text": "",
-            "x": 782.267836711454,
-            "y": 34.545812945454486,
+            "x": 782.27,
+            "y": 34.55,
             "height": 30.0,
             "width_factor": 120.0,
             "rotation": 0.0,
-            "font": "STANDARD",
+            "font": "Arial",
             "handle": null
         }
     },
