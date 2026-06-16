@@ -1,8 +1,8 @@
 {
     "meta": {
-        "source_width": 2060.000000000001,
-        "source_height": 178.96007008800098,
-        "target_width": 2060.000000000001,
+        "source_width": 2040.0,
+        "source_height": 860.0,
+        "target_width": 2060.0,
         "target_height": 200.0,
         "keep_blocks": [
             "1|9A,9E",
@@ -10,6 +10,7 @@
         ],
         "delete_blocks": [],
         "door_opening": "left",
+        "growth_axis": "both",
         "door_text": {
             "enabled": false,
             "text": "",
@@ -26,8 +27,8 @@
         {
             "name": "1",
             "handles": [
-                "9E",
-                "9A"
+                "9A",
+                "9E"
             ],
             "k_w": 0.0,
             "k_h": 0.0,
@@ -58,21 +59,22 @@
             "side_x": "center",
             "auto_chain_x_mode": "side_sum_center",
             "side_sum_left_x": 0.0,
-            "side_sum_right_x": 0.0
+            "side_sum_right_x": 0.0,
+            "resizes": true
         },
         {
             "name": "2",
             "handles": [
-                "98",
                 "99",
-                "97"
+                "97",
+                "98"
             ],
             "k_w": 0.0,
             "k_h": 0.0,
             "growth_p_w": 0.0,
             "growth_p_h": 0.0,
-            "growth_dir_x": "Вліво",
-            "growth_dir_y": "Вниз",
+            "growth_dir_x": "Центр",
+            "growth_dir_y": "Центр",
             "link_x": "X = W",
             "link_y": "Y = H",
             "uid": "2|97,98,99",
@@ -96,7 +98,8 @@
             "chain_growth_after_y": 0.0,
             "side_x": "left",
             "auto_chain_x_mode": "side_sum",
-            "side_sum_x": 0.0
+            "side_sum_x": 0.0,
+            "resizes": false
         }
     ]
 }

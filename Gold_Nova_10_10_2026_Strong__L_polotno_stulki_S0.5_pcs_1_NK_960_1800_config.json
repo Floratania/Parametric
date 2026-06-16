@@ -1,14 +1,14 @@
 {
     "meta": {
-        "source_width": 947.4401051320003,
-        "source_height": 1752.0,
-        "target_width": null,
-        "target_height": null,
+        "source_width": 2040.0,
+        "source_height": 860.0,
+        "target_width": 2060.000000000001,
+        "target_height": 200.0,
         "keep_blocks": [
             "1|14F,150,16A,16B"
         ],
         "delete_blocks": [],
-        "door_opening": "left",
+        "door_opening": "right",
         "door_text": {
             "enabled": false,
             "text": "",
@@ -25,10 +25,10 @@
         {
             "name": "1",
             "handles": [
-                "14F",
-                "16B",
                 "16A",
-                "150"
+                "16B",
+                "150",
+                "14F"
             ],
             "k_w": 0.0,
             "k_h": 0.0,
@@ -38,7 +38,14 @@
             "growth_dir_y": "Центр",
             "link_x": "X = W",
             "link_y": "Y = H",
-            "uid": "1|14F,150,16A,16B"
+            "uid": "1|14F,150,16A,16B",
+            "shift_dir_x": "Вправо",
+            "shift_dir_y": "Вгору",
+            "role_y": "manual",
+            "auto_rule": false,
+            "touch_y_enabled": false,
+            "touch_to_uid": null,
+            "touch_gap_y": 0.0
         }
     ]
 }

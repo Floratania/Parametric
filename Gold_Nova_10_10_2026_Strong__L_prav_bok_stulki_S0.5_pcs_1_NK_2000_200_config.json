@@ -1,9 +1,9 @@
 {
     "meta": {
-        "source_width": 2014.0,
-        "source_height": 178.96007008800007,
-        "target_width": 2050.0,
-        "target_height": 880.0,
+        "source_width": 1984.0,
+        "source_height": 118.96007008800001,
+        "target_width": 2060.000000000001,
+        "target_height": 200.0,
         "keep_blocks": [
             "1|9D",
             "2|9B",
@@ -63,7 +63,9 @@
             "chain_level_growth_y": 0.5,
             "side_x": "left",
             "auto_chain_x_mode": "side_sum",
-            "side_sum_x": 0.0
+            "side_sum_x": 0.0,
+            "shift_dir_x": "Вправо",
+            "shift_dir_y": "Вгору"
         },
         {
             "name": "2",
@@ -97,7 +99,9 @@
             "chain_level_growth_y": 0.5,
             "side_x": "left",
             "auto_chain_x_mode": "side_sum",
-            "side_sum_x": 0.0
+            "side_sum_x": 0.0,
+            "shift_dir_x": "Вправо",
+            "shift_dir_y": "Вгору"
         },
         {
             "name": "3",
@@ -131,7 +135,9 @@
             "chain_level_growth_y": 0.0,
             "side_x": "left",
             "auto_chain_x_mode": "side_sum",
-            "side_sum_x": 0.0
+            "side_sum_x": 0.0,
+            "shift_dir_x": "Вправо",
+            "shift_dir_y": "Вгору"
         },
         {
             "name": "4",
@@ -166,7 +172,9 @@
             "side_x": "center",
             "auto_chain_x_mode": "side_sum_center",
             "side_sum_left_x": 0.0,
-            "side_sum_right_x": 0.0
+            "side_sum_right_x": 0.0,
+            "shift_dir_x": "Вправо",
+            "shift_dir_y": "Вгору"
         },
         {
             "name": "рп2",
@@ -200,7 +208,9 @@
             "chain_level_growth_y": 0.5,
             "side_x": "right",
             "auto_chain_x_mode": "side_sum",
-            "side_sum_x": 0.0
+            "side_sum_x": 0.0,
+            "shift_dir_x": "Вправо",
+            "shift_dir_y": "Вгору"
         },
         {
             "name": "рп1",
@@ -234,7 +244,9 @@
             "chain_level_growth_y": 0.5,
             "side_x": "right",
             "auto_chain_x_mode": "side_sum",
-            "side_sum_x": 0.0
+            "side_sum_x": 0.0,
+            "shift_dir_x": "Вправо",
+            "shift_dir_y": "Вгору"
         },
         {
             "name": "рп3",
@@ -268,7 +280,9 @@
             "chain_level_growth_y": 0.0,
             "side_x": "right",
             "auto_chain_x_mode": "side_sum",
-            "side_sum_x": 0.0
+            "side_sum_x": 0.0,
+            "shift_dir_x": "Вправо",
+            "shift_dir_y": "Вгору"
         },
         {
             "name": "рн'",
@@ -296,22 +310,24 @@
             "side_x": "center",
             "auto_chain_x_mode": "side_sum_center",
             "side_sum_left_x": 0.0,
-            "side_sum_right_x": 0.0
+            "side_sum_right_x": 0.0,
+            "shift_dir_x": "Вправо",
+            "shift_dir_y": "Вгору"
         },
         {
             "name": "ел всередині",
             "handles": [
-                "A4",
-                "7F",
                 "73",
-                "84",
-                "80",
-                "A3",
-                "77",
                 "76",
-                "79",
+                "77",
+                "7F",
+                "95",
+                "84",
                 "96",
-                "95"
+                "79",
+                "A4",
+                "80",
+                "A3"
             ],
             "k_w": 1.0,
             "k_h": 0.5,
@@ -326,22 +342,24 @@
             "touch_y_enabled": false,
             "touch_to_uid": null,
             "touch_gap_y": 0.0,
-            "uid": "ел всередині|73,76,77,79,7F,80,84,95,96,A3,A4"
+            "uid": "ел всередині|73,76,77,79,7F,80,84,95,96,A3,A4",
+            "shift_dir_x": "Вправо",
+            "shift_dir_y": "Вгору"
         },
         {
             "name": "середина",
             "handles": [
-                "A1",
-                "7A",
-                "A0",
-                "7C",
-                "A2",
                 "7D",
                 "83",
-                "81",
-                "7B",
                 "82",
-                "9F"
+                "7B",
+                "A2",
+                "A1",
+                "A0",
+                "7A",
+                "7C",
+                "9F",
+                "81"
             ],
             "k_w": 0.0,
             "k_h": 0.5,
@@ -356,7 +374,9 @@
             "touch_y_enabled": false,
             "touch_to_uid": null,
             "touch_gap_y": 0.0,
-            "uid": "середина|7A,7B,7C,7D,81,82,83,9F,A0,A1,A2"
+            "uid": "середина|7A,7B,7C,7D,81,82,83,9F,A0,A1,A2",
+            "shift_dir_x": "Вправо",
+            "shift_dir_y": "Вгору"
         }
     ]
 }

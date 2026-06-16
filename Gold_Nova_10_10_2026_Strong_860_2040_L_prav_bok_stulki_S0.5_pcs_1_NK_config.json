@@ -1,9 +1,9 @@
 {
     "meta": {
-        "source_width": 1984.0,
-        "source_height": 118.96007008800001,
-        "target_width": 1200.0,
-        "target_height": 2100.0,
+        "source_width": 2040.0,
+        "source_height": 860.0,
+        "target_width": 2060.000000000001,
+        "target_height": 200.0,
         "keep_blocks": [],
         "delete_blocks": [
             "1|74,75,78,7E"
@@ -39,7 +39,14 @@
             "growth_dir_y": "Центр",
             "link_x": "X = H",
             "link_y": "Y = W",
-            "uid": "1|74,75,78,7E"
+            "uid": "1|74,75,78,7E",
+            "shift_dir_x": "Вправо",
+            "shift_dir_y": "Вгору",
+            "role_y": "manual",
+            "auto_rule": false,
+            "touch_y_enabled": false,
+            "touch_to_uid": null,
+            "touch_gap_y": 0.0
         }
     ]
 }

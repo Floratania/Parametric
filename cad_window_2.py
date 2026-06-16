@@ -24224,6 +24224,7 @@ class MiniCAD(QMainWindow):
 
         self.project_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in locals() else os.getcwd()
         self.dxf_path = os.path.join(self.project_dir, "drawing.DXF")
+        self.debug_output = False
         self.current_theme = "Темна"
 
         self.selected_handles = set()
@@ -24232,6 +24233,7 @@ class MiniCAD(QMainWindow):
         self.is_loading_history = False
 
         self.parametric_groups = [] 
+        self.folder_meta = self.default_folder_meta()
         self.project_meta = {
             "source_width": None,
             "source_height": None,
@@ -24240,6 +24242,9 @@ class MiniCAD(QMainWindow):
             "keep_blocks": [],
             "delete_blocks": [],
             "door_opening": "left",
+            "source_door_opening": "left",
+            "target_door_opening": "left",
+            "growth_axis": "both",
             "door_text": {
                 "enabled": False,
                 "text": "",
@@ -24263,6 +24268,7 @@ class MiniCAD(QMainWindow):
         self.coord_snap_marker = None
 
         self.load_doc_safely()
+        self.load_folder_config()
         self.load_project_config()
         
         self.history = HistoryManager(self.dxf_path)
@@ -24299,6 +24305,64 @@ class MiniCAD(QMainWindow):
         base_path = os.path.splitext(self.dxf_path)[0]
         return f"{base_path}_config.json"
 
+    def get_folder_config_path(self):
+        return os.path.join(self.project_dir, "_folder_params.json")
+
+    def default_folder_meta(self):
+        return {
+            "source_width": None,
+            "source_height": None,
+            "target_width": None,
+            "target_height": None,
+            "source_door_opening": None
+        }
+
+    def load_folder_config(self):
+        self.folder_meta = self.default_folder_meta()
+        config_path = self.get_folder_config_path()
+        if not os.path.exists(config_path):
+            return
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                raw_data = json.load(f)
+            if isinstance(raw_data, dict):
+                self.folder_meta.update({
+                    key: raw_data.get(key)
+                    for key in self.folder_meta
+                    if key in raw_data
+                })
+        except Exception as e:
+            print(f"Folder config load error: {e}")
+
+    def save_folder_config(self):
+        try:
+            with open(self.get_folder_config_path(), "w", encoding="utf-8") as f:
+                json.dump(self.folder_meta, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            print(f"Folder config save error: {e}")
+
+    def apply_folder_dimensions_to_meta(self):
+        for key in ("source_width", "source_height", "target_width", "target_height"):
+            value = self.folder_meta.get(key)
+            if value is not None:
+                self.project_meta[key] = value
+        if self.folder_meta.get("source_door_opening"):
+            self.project_meta["source_door_opening"] = self.folder_meta["source_door_opening"]
+
+    def update_folder_dimensions_from_meta(self):
+        changed = False
+        for key in ("source_width", "source_height", "target_width", "target_height"):
+            value = self.project_meta.get(key)
+            if value is not None and self.folder_meta.get(key) != value:
+                self.folder_meta[key] = value
+                changed = True
+        opening = self.project_meta.get("source_door_opening")
+        if opening and self.folder_meta.get("source_door_opening") != opening:
+            self.folder_meta["source_door_opening"] = opening
+            changed = True
+        if changed:
+            self.save_folder_config()
+
     def default_project_meta(self):
         return {
             "source_width": None,
@@ -24308,6 +24372,9 @@ class MiniCAD(QMainWindow):
             "keep_blocks": [],
             "delete_blocks": [],
             "door_opening": "left",
+            "source_door_opening": "left",
+            "target_door_opening": "left",
+            "growth_axis": "both",
             "door_text": self.default_text_settings()
         }
 
@@ -24393,6 +24460,11 @@ class MiniCAD(QMainWindow):
                         g["touch_y_enabled"] = bool(g.get("touch_y_enabled", False))
                         g["touch_to_uid"] = g.get("touch_to_uid")
                         g["touch_gap_y"] = float(g.get("touch_gap_y", 0.0) or 0.0)
+                        if "resizes" not in g:
+                            g["resizes"] = (
+                                abs(float(g.get("growth_p_w", 0.0) or 0.0)) > 0.000001 or
+                                abs(float(g.get("growth_p_h", 0.0) or 0.0)) > 0.000001
+                            )
 
                     self.parametric_groups = data
             except Exception as e:
@@ -24409,6 +24481,8 @@ class MiniCAD(QMainWindow):
                 self.block_keep_state[key] = not (key in delete_names or name in delete_names)
             else:
                 self.block_keep_state[key] = True
+            self.apply_growth_axis_to_group(group)
+        self.apply_folder_dimensions_to_meta()
 
     def save_project_config(self):
         # Динамічно формуємо ім'я JSON-файлу на основі імені поточного DXF
@@ -24593,6 +24667,12 @@ class MiniCAD(QMainWindow):
 
         opening_group = QGroupBox("Відкривання")
         opening_box = QHBoxLayout()
+        opening_box.addWidget(QLabel("Початкове:"))
+        self.combo_source_door_opening = QComboBox()
+        self.combo_source_door_opening.addItems(["Ліве", "Праве"])
+        self.combo_source_door_opening.currentTextChanged.connect(self.on_source_door_opening_changed)
+        opening_box.addWidget(self.combo_source_door_opening)
+        opening_box.addWidget(QLabel("Отримати:"))
         self.combo_door_opening = QComboBox()
         self.combo_door_opening.addItems(["Ліве", "Праве"])
         self.combo_door_opening.currentTextChanged.connect(self.on_door_opening_changed)
@@ -24697,6 +24777,11 @@ class MiniCAD(QMainWindow):
         self.btn_create_group.clicked.connect(self.create_parametric_group)
         group_box.addWidget(self.btn_create_group)
 
+        self.btn_auto_group_entities = QPushButton("Автогрупувати")
+        self.btn_auto_group_entities.setStyleSheet("background-color: #455a64; color: white; font-weight: bold;")
+        self.btn_auto_group_entities.clicked.connect(self.auto_group_entities)
+        self.btn_auto_group_entities.hide()
+
         self.btn_delete_from_dxf = QPushButton(" Видалити об'єкти з креслення (DXF)")
         self.btn_delete_from_dxf.setStyleSheet("background-color: #d32f2f; color: white; font-weight: bold;")
         self.btn_delete_from_dxf.clicked.connect(self.delete_entities_from_dxf)
@@ -24725,7 +24810,20 @@ class MiniCAD(QMainWindow):
    
         group_box.addWidget(QLabel("<b> Параметри трансформації:</b>"))
         
+        growth_axis_layout = QHBoxLayout()
+        growth_axis_layout.addWidget(QLabel("Режим файлу:"))
+        self.combo_group_growth_axis = QComboBox()
+        self.combo_group_growth_axis.addItems(["Ширина + висота", "Тільки ширина", "Тільки висота", "Не росте"])
+        self.combo_group_growth_axis.currentTextChanged.connect(self.on_group_growth_axis_changed)
+        growth_axis_layout.addWidget(self.combo_group_growth_axis)
+        group_box.addLayout(growth_axis_layout)
+
+        self.chk_group_resizes = QCheckBox("Група змінює розмір")
+        self.chk_group_resizes.stateChanged.connect(self.on_group_resizes_changed)
+        group_box.addWidget(self.chk_group_resizes)
+
         grid = QGridLayout()
+        self.param_transform_grid = grid
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(5)
 
@@ -24813,12 +24911,17 @@ class MiniCAD(QMainWindow):
         self.btn_auto_chain_growth_y = QPushButton("Авто сума росту Y")
         self.btn_auto_chain_growth_y.setStyleSheet("background-color: #1565c0; color: white; font-weight: bold;")
         self.btn_auto_chain_growth_y.clicked.connect(self.auto_chain_growth_y)
-        topology_layout.addWidget(self.btn_auto_chain_growth_y)
+        self.btn_auto_chain_growth_y.hide()
 
         self.btn_auto_chain_growth_x = QPushButton("Авто сума росту X")
         self.btn_auto_chain_growth_x.setStyleSheet("background-color: #6a1b9a; color: white; font-weight: bold;")
         self.btn_auto_chain_growth_x.clicked.connect(self.auto_chain_growth_x)
-        topology_layout.addWidget(self.btn_auto_chain_growth_x)
+        self.btn_auto_chain_growth_x.hide()
+
+        self.btn_auto_layout_all = QPushButton("Авторозставити все")
+        self.btn_auto_layout_all.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold;")
+        self.btn_auto_layout_all.clicked.connect(self.auto_layout_all_groups)
+        self.btn_auto_layout_all.hide()
 
         # self.btn_auto_mirror_x = QPushButton("Дзеркальні сторони X")
         # self.btn_auto_mirror_x.setStyleSheet("background-color: #8d6e63; color: white; font-weight: bold;")
@@ -24987,15 +25090,20 @@ class MiniCAD(QMainWindow):
         return max_x - min_x, max_y - min_y
 
     def update_dimension_inputs_from_meta(self):
+        self.apply_folder_dimensions_to_meta()
         source_w = self.project_meta.get("source_width")
         source_h = self.project_meta.get("source_height")
         if source_w is None or source_h is None:
             source_w, source_h = self.get_dxf_bounds_dimensions()
             self.project_meta["source_width"] = source_w
             self.project_meta["source_height"] = source_h
+            self.update_folder_dimensions_from_meta()
 
         target_w = self.project_meta.get("target_width", source_w)
         target_h = self.project_meta.get("target_height", source_h)
+        self.project_meta["target_width"] = target_w
+        self.project_meta["target_height"] = target_h
+        self.update_folder_dimensions_from_meta()
 
         self.input_current_width.setText(self.format_dimension_value(source_w))
         self.input_current_height.setText(self.format_dimension_value(source_h))
@@ -25003,6 +25111,92 @@ class MiniCAD(QMainWindow):
         self.input_target_height.setText(self.format_dimension_value(target_h))
         self.sync_text_inputs_from_meta()
         self.sync_opening_inputs_from_meta()
+        self.sync_file_growth_axis_combo()
+
+    def prompt_source_dimensions_on_open(self):
+        if self.folder_meta.get("source_width") is not None and self.folder_meta.get("source_height") is not None:
+            self.apply_folder_dimensions_to_meta()
+            if not self.folder_meta.get("source_door_opening"):
+                opening_text, opening_ok = QInputDialog.getItem(
+                    self,
+                    "Початкове відкривання",
+                    "Яке відкривання у файлах цієї папки?",
+                    ["Ліве", "Праве"],
+                    0,
+                    False
+                )
+                opening = "right" if opening_ok and "Прав" in opening_text else "left"
+                self.project_meta["source_door_opening"] = opening
+                self.project_meta["target_door_opening"] = opening
+                self.project_meta["door_opening"] = opening
+                self.folder_meta["source_door_opening"] = opening
+                self.save_folder_config()
+                self.save_project_config()
+            return False
+        guessed_w, guessed_h = self.get_dxf_bounds_dimensions()
+        source_w = self.folder_meta.get("source_width") or self.project_meta.get("source_width") or guessed_w
+        source_h = self.folder_meta.get("source_height") or self.project_meta.get("source_height") or guessed_h
+        target_w = self.folder_meta.get("target_width") or self.project_meta.get("target_width")
+        target_h = self.folder_meta.get("target_height") or self.project_meta.get("target_height")
+
+        default_text = ""
+        if source_w is not None and source_h is not None:
+            default_text = f"{self.format_dimension_value(source_w)} x {self.format_dimension_value(source_h)}"
+
+        text, ok = QInputDialog.getText(
+            self,
+            "Початковий розмір",
+            "Введіть початкову ширину і висоту (W x H):",
+            text=default_text
+        )
+        if not ok:
+            return False
+
+        values = [
+            float(value.replace(",", "."))
+            for value in re.findall(r"-?\d+(?:[,.]\d+)?", text)
+        ]
+        if len(values) < 2:
+            QMessageBox.warning(
+                self,
+                "Початковий розмір",
+                "Введіть два числа, наприклад: 860 x 2040"
+            )
+            return False
+
+        source_w, source_h = values[0], values[1]
+        self.project_meta["source_width"] = source_w
+        self.project_meta["source_height"] = source_h
+        self.folder_meta["source_width"] = source_w
+        self.folder_meta["source_height"] = source_h
+
+        if not self.folder_meta.get("source_door_opening"):
+            opening_text, opening_ok = QInputDialog.getItem(
+                self,
+                "Початкове відкривання",
+                "Яке відкривання у файлах цієї папки?",
+                ["Ліве", "Праве"],
+                0,
+                False
+            )
+            opening = "right" if opening_ok and "Прав" in opening_text else "left"
+            self.project_meta["source_door_opening"] = opening
+            self.project_meta["target_door_opening"] = opening
+            self.project_meta["door_opening"] = opening
+            self.folder_meta["source_door_opening"] = opening
+
+        if target_w is None:
+            target_w = source_w
+        if target_h is None:
+            target_h = source_h
+        self.project_meta["target_width"] = target_w
+        self.project_meta["target_height"] = target_h
+        self.folder_meta["target_width"] = target_w
+        self.folder_meta["target_height"] = target_h
+
+        self.save_folder_config()
+        self.save_project_config()
+        return True
 
     def remember_source_dimensions(self):
         source_w = self.parse_numeric_text(self.input_current_width.text())
@@ -25013,6 +25207,7 @@ class MiniCAD(QMainWindow):
         self.project_meta["source_height"] = source_h
         self.project_meta["target_width"] = self.parse_numeric_text(self.input_target_width.text())
         self.project_meta["target_height"] = self.parse_numeric_text(self.input_target_height.text())
+        self.update_folder_dimensions_from_meta()
         self.save_project_config()
         self.update_dimension_inputs_from_meta()
         self.lbl_status_calc.setText("<font color='#a5d6a7'>Початкові розміри збережено.</font>")
@@ -25301,6 +25496,32 @@ class MiniCAD(QMainWindow):
     def on_door_opening_changed(self, text):
         self.record_action_snapshot()
         self.project_meta["door_opening"] = "right" if "Прав" in text else "left"
+        self.save_project_config()
+
+    def sync_opening_inputs_from_meta(self):
+        if not hasattr(self, "combo_door_opening"):
+            return
+        source_opening = self.project_meta.get("source_door_opening") or self.project_meta.get("door_opening", "left")
+        target_opening = self.project_meta.get("target_door_opening") or self.project_meta.get("door_opening", source_opening)
+        if hasattr(self, "combo_source_door_opening"):
+            self.combo_source_door_opening.blockSignals(True)
+            self.combo_source_door_opening.setCurrentText("Праве" if source_opening == "right" else "Ліве")
+            self.combo_source_door_opening.blockSignals(False)
+        self.combo_door_opening.blockSignals(True)
+        self.combo_door_opening.setCurrentText("Праве" if target_opening == "right" else "Ліве")
+        self.combo_door_opening.blockSignals(False)
+
+    def on_source_door_opening_changed(self, text):
+        self.record_action_snapshot()
+        self.project_meta["source_door_opening"] = "right" if "Прав" in text else "left"
+        self.folder_meta["source_door_opening"] = self.project_meta["source_door_opening"]
+        self.save_folder_config()
+        self.save_project_config()
+
+    def on_door_opening_changed(self, text):
+        self.record_action_snapshot()
+        self.project_meta["target_door_opening"] = "right" if "Прав" in text else "left"
+        self.project_meta["door_opening"] = self.project_meta["target_door_opening"]
         self.save_project_config()
 
     def get_dxf_bounds(self, doc=None):
@@ -25823,6 +26044,10 @@ class MiniCAD(QMainWindow):
                             params[key] = num
                     elif key in ("text", "font"):
                         params[key] = str(value).strip()
+                    elif key in ("door_opening", "source_opening", "target_opening", "source_door_opening", "target_door_opening"):
+                        opening = self.parse_door_opening_value(value)
+                        if opening:
+                            params[key] = opening
                     elif key in ("keep_blocks", "delete_blocks"):
                         params.setdefault(key, []).extend(self.split_block_names(value))
             return params
@@ -25838,6 +26063,10 @@ class MiniCAD(QMainWindow):
                     params[key] = num
             elif key in ("text", "font"):
                 params[key] = str(value).strip()
+            elif key in ("door_opening", "source_opening", "target_opening", "source_door_opening", "target_door_opening"):
+                opening = self.parse_door_opening_value(value)
+                if opening:
+                    params[key] = opening
             elif key in ("keep_blocks", "delete_blocks"):
                 params[key] = self.split_block_names(value)
         return params
@@ -25847,10 +26076,19 @@ class MiniCAD(QMainWindow):
             return []
         return [part.strip() for part in re.split(r"[,;\n]+", str(value)) if part.strip()]
 
-    def apply_imported_parameters(self, params):
+    def apply_imported_parameters(self, params, refresh_ui=True, save_config=True):
         for key in ("source_width", "source_height", "target_width", "target_height"):
             if key in params:
                 self.project_meta[key] = params[key]
+        source_opening = params.get("source_door_opening", params.get("source_opening"))
+        target_opening = params.get("target_door_opening", params.get("target_opening", params.get("door_opening")))
+        if source_opening:
+            self.project_meta["source_door_opening"] = source_opening
+        if target_opening:
+            self.project_meta["target_door_opening"] = target_opening
+            self.project_meta["door_opening"] = target_opening
+        if save_config:
+            self.update_folder_dimensions_from_meta()
         text_settings = self.get_text_settings()
         text_key_map = {
             "text": "text",
@@ -25882,14 +26120,35 @@ class MiniCAD(QMainWindow):
                 key = self.get_group_key(group)
                 if key in delete_set or name in delete_set:
                     self.block_keep_state[key] = False
-        self.update_dimension_inputs_from_meta()
-        self.sync_text_inputs_from_meta()
-        self.load_block_filter_list()
-        self.save_project_config()
+        if refresh_ui:
+            self.update_dimension_inputs_from_meta()
+            self.sync_opening_inputs_from_meta()
+            self.sync_text_inputs_from_meta()
+            self.load_block_filter_list()
+        if save_config:
+            self.save_project_config()
 
     def sanitize_filename_part(self, value):
         text = self.format_dimension_value(value)
         return re.sub(r"[^0-9A-Za-zА-Яа-я_\-.]+", "_", text)
+
+    def parse_door_opening_value(self, value):
+        text = str(value or "").strip().lower()
+        if not text:
+            return None
+        if text in ("right", "r", "prave") or "прав" in text or "right" in text:
+            return "right"
+        if text in ("left", "l", "live") or "лів" in text or "лев" in text or "left" in text:
+            return "left"
+        return None
+
+    def get_export_output_dir(self, target_w, target_h):
+        width_part = self.sanitize_filename_part(target_w)
+        height_part = self.sanitize_filename_part(target_h)
+        folder_name = f"generated_{width_part}_{height_part}"
+        output_dir = os.path.join(self.project_dir, folder_name)
+        os.makedirs(output_dir, exist_ok=True)
+        return output_dir
 
     def build_export_path(self, target_w, target_h):
         base_name = os.path.splitext(os.path.basename(self.dxf_path))[0]
@@ -25897,23 +26156,105 @@ class MiniCAD(QMainWindow):
         width_part = self.sanitize_filename_part(target_w)
         height_part = self.sanitize_filename_part(target_h)
         name = f"{base_name}_{width_part}_{height_part}.DXF"
-        path = os.path.join(self.project_dir, name)
+        output_dir = self.get_export_output_dir(target_w, target_h)
+        path = os.path.join(output_dir, name)
         counter = 2
         while os.path.exists(path):
             name = f"{base_name}_{width_part}_{height_part}_{counter}.DXF"
-            path = os.path.join(self.project_dir, name)
+            path = os.path.join(output_dir, name)
             counter += 1
         return path
 
+    def export_target_opening(self):
+        source_opening = self.project_meta.get("source_door_opening") or self.project_meta.get("door_opening", "left")
+        return self.project_meta.get("target_door_opening") or self.project_meta.get("door_opening", source_opening)
+
+    def export_needs_opening_mirror(self):
+        source_opening = self.project_meta.get("source_door_opening") or self.project_meta.get("door_opening", "left")
+        return source_opening != self.export_target_opening()
+
+    def apply_opening_to_export_doc(self, export_doc):
+        if not self.export_needs_opening_mirror():
+            return
+        min_x, _min_y, max_x, _max_y = self.get_dxf_bounds(export_doc)
+        if min_x is None:
+            return
+        axis_x = (min_x + max_x) * 0.5
+        for entity in export_doc.modelspace():
+            self.mirror_entity_horizontally(entity, axis_x)
+
+    def save_generated_folder_config(self, output_dir, target_w, target_h, target_opening):
+        folder_meta = self.default_folder_meta()
+        folder_meta.update({
+            "source_width": target_w,
+            "source_height": target_h,
+            "target_width": target_w,
+            "target_height": target_h,
+            "source_door_opening": target_opening
+        })
+        try:
+            with open(os.path.join(output_dir, "_folder_params.json"), "w", encoding="utf-8") as f:
+                json.dump(folder_meta, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            print(f"Generated folder config save error: {e}")
+
+    def save_generated_project_config(self, export_path, target_w, target_h):
+        target_opening = self.export_target_opening()
+        generated_meta = copy.deepcopy(self.project_meta)
+        generated_meta.update({
+            "source_width": target_w,
+            "source_height": target_h,
+            "target_width": target_w,
+            "target_height": target_h,
+            "source_door_opening": target_opening,
+            "target_door_opening": target_opening,
+            "door_opening": target_opening
+        })
+        generated_meta["keep_blocks"] = [
+            key for key, keep in self.block_keep_state.items() if keep
+        ]
+        generated_meta["delete_blocks"] = [
+            key for key, keep in self.block_keep_state.items() if not keep
+        ]
+        groups_data = []
+        for group in self.parametric_groups:
+            self.get_group_key(group)
+            group_data = group.copy()
+            group_data["handles"] = list(group.get("handles", []))
+            groups_data.append(group_data)
+        config_path = f"{os.path.splitext(export_path)[0]}_config.json"
+        try:
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump({"meta": generated_meta, "groups": groups_data}, f, indent=4, ensure_ascii=False)
+            self.save_generated_folder_config(os.path.dirname(export_path), target_w, target_h, target_opening)
+        except Exception as e:
+            print(f"Generated project config save error: {e}")
+
+    def is_generated_dimension_dxf(self, file_name):
+        base_name = os.path.splitext(file_name)[0]
+        return re.search(r"_\d{2,5}_\d{2,5}(?:_\d+)?$", base_name) is not None
+
+    def get_folder_source_dxf_files(self):
+        try:
+            files = os.listdir(self.project_dir)
+        except Exception:
+            return []
+        return sorted(
+            file_name for file_name in files
+            if file_name.lower().endswith(".dxf")
+            and not self.is_generated_dimension_dxf(file_name)
+        )
+
     def preview_parametric_scale(self):
         self.record_action_snapshot()
-        print("\n" + "=" * 90)
-        print("[PREVIEW DEBUG] START PREVIEW")
-        print("[PREVIEW DEBUG] Перегляд рахує не від файлу на диску, а від self.original_geometries")
-        print(f"[PREVIEW DEBUG] base handles={len(self.original_geometries)}")
-        print(f"[PREVIEW DEBUG] source W/H={self.project_meta.get('source_width')} / {self.project_meta.get('source_height')}")
-        print(f"[PREVIEW DEBUG] target W/H={self.input_target_width.text()} / {self.input_target_height.text()}")
-        print("=" * 90)
+        if self.debug_output:
+            print("\n" + "=" * 90)
+            print("[PREVIEW DEBUG] START PREVIEW")
+            print("[PREVIEW DEBUG] Перегляд рахує не від файлу на диску, а від self.original_geometries")
+            print(f"[PREVIEW DEBUG] base handles={len(self.original_geometries)}")
+            print(f"[PREVIEW DEBUG] source W/H={self.project_meta.get('source_width')} / {self.project_meta.get('source_height')}")
+            print(f"[PREVIEW DEBUG] target W/H={self.input_target_width.text()} / {self.input_target_height.text()}")
+            print("=" * 90)
         if self.process_parametric_percentage_scale(save_result=False, record_history=False):
             self.lbl_status_calc.setText("<font color='#4fc3f7'>Перегляд застосовано тільки на екрані. Файл ще не збережено.</font>")
 
@@ -25930,6 +26271,7 @@ class MiniCAD(QMainWindow):
 
     def export_new_dxf_with_dimensions(self):
         self.collect_text_settings_from_inputs()
+        original_dxf_path = self.dxf_path
         original_bytes = None
         if os.path.exists(self.dxf_path):
             with open(self.dxf_path, "rb") as f:
@@ -25942,9 +26284,15 @@ class MiniCAD(QMainWindow):
         self.project_meta["source_height"] = self.parse_numeric_text(self.input_current_height.text())
         self.project_meta["target_width"] = self.parse_numeric_text(self.input_target_width.text())
         self.project_meta["target_height"] = self.parse_numeric_text(self.input_target_height.text())
+        self.update_folder_dimensions_from_meta()
         self.is_loading_history = True
-        if not self.process_parametric_percentage_scale(save_result=True, record_history=False):
+        self.suppress_project_config_save = True
+        try:
+            ok_to_export = self.process_parametric_percentage_scale(save_result=True, record_history=False)
+        finally:
+            self.suppress_project_config_save = False
             self.is_loading_history = False
+        if not ok_to_export:
             if original_bytes is not None:
                 with open(self.dxf_path, "wb") as f:
                     f.write(original_bytes)
@@ -25958,7 +26306,6 @@ class MiniCAD(QMainWindow):
             self.load_entities_into_list()
             self.update_viewer()
             return
-        self.is_loading_history = False
 
         target_w = self.project_meta.get("target_width")
         target_h = self.project_meta.get("target_height")
@@ -25975,7 +26322,9 @@ class MiniCAD(QMainWindow):
             if hndl in export_doc.entitydb:
                 export_msp.delete_entity(export_doc.entitydb[hndl])
 
+        self.apply_opening_to_export_doc(export_doc)
         export_doc.saveas(export_path)
+        self.save_generated_project_config(export_path, target_w, target_h)
         if original_bytes is not None:
             with open(self.dxf_path, "wb") as f:
                 f.write(original_bytes)
@@ -26003,6 +26352,7 @@ class MiniCAD(QMainWindow):
         if not path:
             return
 
+        original_dxf_path = self.dxf_path
         original_bytes = None
         if os.path.exists(self.dxf_path):
             with open(self.dxf_path, "rb") as f:
@@ -26014,43 +26364,61 @@ class MiniCAD(QMainWindow):
         try:
             rows = self.read_xlsx_rows(path) if path.lower().endswith(".xlsx") else self.read_csv_rows(path)
             jobs = self.extract_batch_jobs(rows)
+            source_files = self.get_folder_source_dxf_files()
+            if not source_files:
+                source_files = [os.path.basename(self.dxf_path)]
             created = []
             skipped = 0
             for job in jobs:
-                self.project_meta = copy.deepcopy(original_meta)
-                self.parametric_groups = copy.deepcopy(original_groups)
-                self.block_keep_state = copy.deepcopy(original_keep_state)
-                self.apply_imported_parameters(job)
-                self.is_loading_history = True
-                ok_to_export = self.process_parametric_percentage_scale(save_result=True, record_history=False)
-                self.is_loading_history = False
-                if not ok_to_export:
-                    skipped += 1
-                    if original_bytes is not None:
-                        with open(self.dxf_path, "wb") as f:
-                            f.write(original_bytes)
+                for source_file in source_files:
+                    source_path = os.path.join(self.project_dir, source_file)
+                    if not os.path.exists(source_path):
+                        continue
+                    with open(source_path, "rb") as f:
+                        source_bytes = f.read()
+
+                    self.dxf_path = source_path
+                    self.doc = ezdxf.readfile(self.dxf_path)
+                    self.load_project_config()
+                    self.save_original_geometries()
+                    self.apply_imported_parameters(job, refresh_ui=False, save_config=False)
+                    self.is_loading_history = True
+                    self.suppress_project_config_save = True
+                    try:
+                        ok_to_export = self.process_parametric_percentage_scale(save_result=True, record_history=False)
+                    finally:
+                        self.suppress_project_config_save = False
+                        self.is_loading_history = False
+                    if not ok_to_export:
+                        skipped += 1
+                        with open(source_path, "wb") as f:
+                            f.write(source_bytes)
                         self.doc = ezdxf.readfile(self.dxf_path)
                         self.save_original_geometries()
-                    continue
+                        continue
 
-                target_w = self.project_meta.get("target_width")
-                target_h = self.project_meta.get("target_height")
-                export_path = self.build_export_path(target_w, target_h)
-                export_doc = copy.deepcopy(self.doc)
-                export_msp = export_doc.modelspace()
-                delete_handles = self.get_export_delete_handles()
-                for hndl in delete_handles:
-                    if hndl in export_doc.entitydb:
-                        export_msp.delete_entity(export_doc.entitydb[hndl])
-                export_doc.saveas(export_path)
-                created.append(os.path.basename(export_path))
+                    target_w = self.project_meta.get("target_width")
+                    target_h = self.project_meta.get("target_height")
+                    export_path = self.build_export_path(target_w, target_h)
+                    export_doc = copy.deepcopy(self.doc)
+                    export_msp = export_doc.modelspace()
+                    delete_handles = self.get_export_delete_handles()
+                    for hndl in delete_handles:
+                        if hndl in export_doc.entitydb:
+                            export_msp.delete_entity(export_doc.entitydb[hndl])
+                    self.apply_opening_to_export_doc(export_doc)
+                    export_doc.saveas(export_path)
+                    self.save_generated_project_config(export_path, target_w, target_h)
+                    created.append(os.path.basename(export_path))
 
-                if original_bytes is not None:
-                    with open(self.dxf_path, "wb") as f:
-                        f.write(original_bytes)
+                    with open(source_path, "wb") as f:
+                        f.write(source_bytes)
                     self.doc = ezdxf.readfile(self.dxf_path)
                     self.save_original_geometries()
 
+            self.dxf_path = original_dxf_path
+            if os.path.exists(self.dxf_path):
+                self.doc = ezdxf.readfile(self.dxf_path)
             self.project_meta = original_meta
             self.parametric_groups = original_groups
             self.block_keep_state = original_keep_state
@@ -26068,6 +26436,7 @@ class MiniCAD(QMainWindow):
                 self.lbl_status_calc.setText(f"<font color='#a5d6a7'>Пакет створено: {len(created)} DXF</font>")
         except Exception as e:
             self.lbl_status_calc.setText(f"<font color='red'>Помилка пакета: {e}</font>")
+            self.dxf_path = original_dxf_path
             if original_bytes is not None:
                 with open(self.dxf_path, "wb") as f:
                     f.write(original_bytes)
@@ -26093,6 +26462,10 @@ class MiniCAD(QMainWindow):
                     text_value = str(value).strip()
                     if text_value:
                         params[key] = text_value
+                elif key in ("door_opening", "source_opening", "target_opening", "source_door_opening", "target_door_opening"):
+                    opening = self.parse_door_opening_value(value)
+                    if opening:
+                        params[key] = opening
                 elif key in ("keep_blocks", "delete_blocks"):
                     names = self.split_block_names(value)
                     if names:
@@ -26135,7 +26508,9 @@ class MiniCAD(QMainWindow):
                 self.global_recalc_undo_stack.clear()
                 self.global_recalc_redo_stack.clear()
                 
+                self.load_folder_config()
                 self.load_project_config()
+                self.prompt_source_dimensions_on_open()
                 self.update_dimension_inputs_from_meta()
                 
                 self.history = HistoryManager(self.dxf_path)
@@ -26398,6 +26773,178 @@ class MiniCAD(QMainWindow):
         
         self.view.viewport().update()
 
+    def guess_growth_axis_for_bbox(self, bbox):
+        bounds = self.get_non_text_dxf_bounds()
+        if bounds[0] is None or not bbox:
+            return "both"
+        ratio_x = self.auto_layout_dimension_ratio(bbox, bounds, "x")
+        ratio_y = self.auto_layout_dimension_ratio(bbox, bounds, "y")
+        grows_x = ratio_x >= 0.55
+        grows_y = ratio_y >= 0.55
+        if grows_x and grows_y:
+            return "both"
+        if grows_x:
+            return "width"
+        if grows_y:
+            return "height"
+        return "fixed"
+
+    def make_parametric_group_data(self, name, handles, growth_axis="both", auto_grouped=False):
+        group = {
+            "name": name,
+            "handles": set(handles),
+            "k_w": 0.0,
+            "k_h": 0.0,
+            "growth_p_w": 0.0,
+            "growth_p_h": 0.0,
+            "growth_dir_x": "Центр",
+            "growth_dir_y": "Центр",
+            "shift_dir_x": "Вправо",
+            "shift_dir_y": "Вгору",
+            "link_x": "X = W",
+            "link_y": "Y = H",
+            "growth_axis": growth_axis,
+            "resizes": False,
+            "role_y": "manual",
+            "auto_rule": False,
+            "auto_grouped": auto_grouped,
+            "touch_y_enabled": False,
+            "touch_to_uid": None,
+            "touch_gap_y": 0.0
+        }
+        self.get_group_key(group)
+        self.apply_growth_axis_to_group(group)
+        return group
+
+    def union_bboxes(self, bboxes):
+        valid = [bbox for bbox in bboxes if bbox]
+        if not valid:
+            return None
+        return (
+            min(b[0] for b in valid),
+            min(b[1] for b in valid),
+            max(b[2] for b in valid),
+            max(b[3] for b in valid),
+        )
+
+    def bboxes_near(self, a, b, tolerance):
+        return not (
+            a[2] < b[0] - tolerance or
+            b[2] < a[0] - tolerance or
+            a[3] < b[1] - tolerance or
+            b[3] < a[1] - tolerance
+        )
+
+    def collect_autogroup_entries(self):
+        entries = []
+        for entity in self.doc.modelspace():
+            bbox = self.entity_bbox(entity)
+            if not bbox:
+                continue
+            handle = entity.dxf.handle
+            layer = str(getattr(entity.dxf, "layer", "") or "0")
+            entries.append({
+                "handle": handle,
+                "bbox": bbox,
+                "layer": layer,
+                "type": entity.dxftype(),
+            })
+        return entries
+
+    def build_layer_autogroups(self, entries):
+        layer_map = {}
+        for entry in entries:
+            layer_map.setdefault(entry["layer"], []).append(entry)
+        useful_layers = {
+            layer: items for layer, items in layer_map.items()
+            if len(items) > 1 and layer.strip() and layer.strip() != "0"
+        }
+        if len(useful_layers) < 2:
+            return []
+        groups = []
+        for layer, items in sorted(useful_layers.items()):
+            handles = [item["handle"] for item in items]
+            bbox = self.union_bboxes([item["bbox"] for item in items])
+            groups.append((f"Шар {layer}", handles, bbox))
+        return groups
+
+    def build_proximity_autogroups(self, entries, tolerance=3.0):
+        n = len(entries)
+        visited = set()
+        groups = []
+        for start in range(n):
+            if start in visited:
+                continue
+            stack = [start]
+            visited.add(start)
+            component = []
+            while stack:
+                idx = stack.pop()
+                component.append(entries[idx])
+                bbox = entries[idx]["bbox"]
+                for other in range(n):
+                    if other in visited:
+                        continue
+                    if self.bboxes_near(bbox, entries[other]["bbox"], tolerance):
+                        visited.add(other)
+                        stack.append(other)
+            groups.append(component)
+        result = []
+        for i, component in enumerate(groups, start=1):
+            handles = [item["handle"] for item in component]
+            bbox = self.union_bboxes([item["bbox"] for item in component])
+            result.append((f"Деталь {i}", handles, bbox))
+        return result
+
+    def auto_group_entities(self):
+        entries = self.collect_autogroup_entries()
+        if not entries:
+            self.lbl_status_calc.setText("<font color='red'>Немає геометрії для автогрупування.</font>")
+            return
+        if self.parametric_groups:
+            answer = QMessageBox.question(
+                self,
+                "Автогрупувати",
+                "Поточні параметричні групи буде замінено. Продовжити?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
+        auto_groups = self.build_layer_autogroups(entries)
+        method = "layers"
+        if not auto_groups:
+            auto_groups = self.build_proximity_autogroups(entries)
+            method = "proximity"
+
+        auto_groups = [
+            (name, handles, bbox)
+            for name, handles, bbox in auto_groups
+            if handles and bbox
+        ]
+        if not auto_groups:
+            self.lbl_status_calc.setText("<font color='red'>Не вдалося сформувати групи автоматично.</font>")
+            return
+
+        self.record_action_snapshot()
+        self.parametric_groups = []
+        self.block_keep_state = {}
+        file_axis = self.project_meta.get("growth_axis", "both")
+        for name, handles, bbox in auto_groups:
+            group = self.make_parametric_group_data(name, handles, file_axis, auto_grouped=True)
+            self.parametric_groups.append(group)
+            self.block_keep_state[group["uid"]] = True
+
+        self.clear_selection()
+        self.push_to_history()
+        self.save_project_config()
+        self.load_groups_into_list()
+        self.update_viewer()
+        self.lbl_status_calc.setText(
+            f"<font color='#a5d6a7'>Автогрупування: створено {len(self.parametric_groups)} груп ({method}).</font>"
+        )
+
     def create_parametric_group(self):
         if len(self.selected_handles) < 1:
             return  
@@ -26428,6 +26975,8 @@ class MiniCAD(QMainWindow):
             "shift_dir_y": "Вгору",
             "link_x": "X = W",
             "link_y": "Y = H",
+            "growth_axis": "both",
+            "resizes": False,
             "role_y": "manual",
             "auto_rule": False,
             "touch_y_enabled": False,
@@ -26481,7 +27030,13 @@ class MiniCAD(QMainWindow):
             role = group.get("role_y", "manual")
             auto_mark = "⚙️" if group.get("auto_rule") else "✍️"
             touch_mark = "🔗" if group.get("touch_y_enabled") else ""
-            text = f"🧩 {auto_mark}{touch_mark} {name} ({len(group['handles'])} об.) Y:{role}"
+            axis_mark = {
+                "both": "WH",
+                "width": "W",
+                "height": "H",
+                "fixed": "fix",
+            }.get(self.project_meta.get("growth_axis", "both"), "WH")
+            text = f"🧩 {auto_mark}{touch_mark} {name} ({len(group['handles'])} об.) {axis_mark} Y:{role}"
             item = QListWidgetItem(text)
             item.setData(Qt.ItemDataRole.UserRole, idx)
             self.group_list_widget.addItem(item)
@@ -26494,11 +27049,16 @@ class MiniCAD(QMainWindow):
             self.combo_k_w, self.combo_k_h, self.combo_growth_p_w, 
             self.combo_growth_p_h, self.combo_growth_dir_x, self.combo_growth_dir_y,
             self.combo_shift_dir_x, self.combo_shift_dir_y,
+            self.chk_group_resizes,
             self.combo_link_x, self.combo_link_y
         ]
         
         if not selected:
             for widget in widgets_to_toggle: widget.setEnabled(False)
+            self.chk_group_resizes.blockSignals(True)
+            self.chk_group_resizes.setChecked(False)
+            self.chk_group_resizes.blockSignals(False)
+            self.apply_group_controls_visibility(None)
             return
         
         idx = selected[0].data(Qt.ItemDataRole.UserRole)
@@ -26512,6 +27072,7 @@ class MiniCAD(QMainWindow):
         self.combo_k_h.setCurrentText(format_factor(group.get("k_h", 0.0)))
         self.combo_growth_p_w.setCurrentText(format_factor(group.get("growth_p_w", 0.0)))
         self.combo_growth_p_h.setCurrentText(format_factor(group.get("growth_p_h", 0.0)))
+        self.chk_group_resizes.setChecked(self.group_resizes(group))
         
         self.combo_growth_dir_x.setCurrentText(group.get("growth_dir_x", "Вправо"))
         self.combo_growth_dir_y.setCurrentText(group.get("growth_dir_y", "Вгору"))
@@ -26526,9 +27087,120 @@ class MiniCAD(QMainWindow):
         for widget in widgets_to_toggle:
             widget.blockSignals(False)
 
+        self.apply_group_controls_visibility(group)
         self.selected_handles = set(group["handles"])
         self.sync_list_from_handles()
         self.update_viewer()
+
+    def growth_axis_to_label(self, axis):
+        return {
+            "both": "Ширина + висота",
+            "width": "Тільки ширина",
+            "height": "Тільки висота",
+            "fixed": "Не росте",
+        }.get(axis, "Ширина + висота")
+
+    def growth_axis_from_label(self, label):
+        text = str(label)
+        if "Тільки ширина" in text:
+            return "width"
+        if "Тільки висота" in text:
+            return "height"
+        if "Не росте" in text:
+            return "fixed"
+        return "both"
+
+    def set_param_grid_row_visible(self, row, visible):
+        grid = getattr(self, "param_transform_grid", None)
+        if not grid:
+            return
+        for col in range(grid.columnCount()):
+            item = grid.itemAtPosition(row, col)
+            if item and item.widget():
+                item.widget().setVisible(visible)
+
+    def apply_growth_axis_ui(self, axis):
+        self.set_param_grid_row_visible(0, axis in ("both", "width"))
+        self.set_param_grid_row_visible(1, axis in ("both", "height"))
+
+    def set_param_grid_cells_visible(self, row, columns, visible):
+        grid = getattr(self, "param_transform_grid", None)
+        if not grid:
+            return
+        for col in columns:
+            item = grid.itemAtPosition(row, col)
+            if item and item.widget():
+                item.widget().setVisible(visible)
+
+    def group_resizes(self, group):
+        if not group:
+            return False
+        if "resizes" in group:
+            return bool(group.get("resizes"))
+        return (
+            abs(float(group.get("growth_p_w", 0.0) or 0.0)) > 0.000001 or
+            abs(float(group.get("growth_p_h", 0.0) or 0.0)) > 0.000001
+        )
+
+    def apply_group_controls_visibility(self, group):
+        axis = self.project_meta.get("growth_axis", "both")
+        self.apply_growth_axis_ui(axis)
+        show_growth = self.group_resizes(group)
+        show_x = axis in ("both", "width")
+        show_y = axis in ("both", "height")
+        self.set_param_grid_cells_visible(0, (4, 5, 6), show_growth and show_x)
+        self.set_param_grid_cells_visible(1, (4, 5, 6), show_growth and show_y)
+
+    def apply_growth_axis_to_group(self, group):
+        axis = self.project_meta.get("growth_axis", "both")
+        if not self.group_resizes(group):
+            group["growth_p_w"] = 0.0
+            group["growth_p_h"] = 0.0
+            group["growth_dir_x"] = "Центр"
+            group["growth_dir_y"] = "Центр"
+            return
+        if axis in ("height", "fixed"):
+            group["growth_p_w"] = 0.0
+            group["growth_dir_x"] = "Центр"
+        if axis in ("width", "fixed"):
+            group["growth_p_h"] = 0.0
+            group["growth_dir_y"] = "Центр"
+
+    def sync_file_growth_axis_combo(self):
+        if not hasattr(self, "combo_group_growth_axis"):
+            return
+        self.combo_group_growth_axis.blockSignals(True)
+        self.combo_group_growth_axis.setCurrentText(
+            self.growth_axis_to_label(self.project_meta.get("growth_axis", "both"))
+        )
+        self.combo_group_growth_axis.blockSignals(False)
+        current = self.group_list_widget.currentItem() if hasattr(self, "group_list_widget") else None
+        group = self.parametric_groups[current.data(Qt.ItemDataRole.UserRole)] if current else None
+        self.apply_group_controls_visibility(group)
+
+    def on_group_growth_axis_changed(self, text):
+        self.record_action_snapshot()
+        self.project_meta["growth_axis"] = self.growth_axis_from_label(text)
+        for group in self.parametric_groups:
+            self.apply_growth_axis_to_group(group)
+        current = self.group_list_widget.currentItem()
+        group = self.parametric_groups[current.data(Qt.ItemDataRole.UserRole)] if current else None
+        self.apply_group_controls_visibility(group)
+        self.save_project_config()
+        self.on_group_selection_changed()
+
+    def on_group_resizes_changed(self, state):
+        selected = self.group_list_widget.selectedItems()
+        if not selected:
+            return
+        self.record_action_snapshot()
+        idx = selected[0].data(Qt.ItemDataRole.UserRole)
+        group = self.parametric_groups[idx]
+        group["resizes"] = state == Qt.CheckState.Checked.value
+        self.apply_growth_axis_to_group(group)
+        self.apply_group_controls_visibility(group)
+        self.save_project_config()
+        self.on_group_selection_changed()
 
     def on_combo_k_w_changed(self, text):
         selected = self.group_list_widget.selectedItems()
@@ -26633,6 +27305,11 @@ class MiniCAD(QMainWindow):
         group.setdefault("touch_y_enabled", False)
         group.setdefault("touch_to_uid", None)
         group.setdefault("touch_gap_y", 0.0)
+        group.setdefault("growth_axis", "both")
+        group.setdefault("resizes", (
+            abs(float(group.get("growth_p_w", 0.0) or 0.0)) > 0.000001 or
+            abs(float(group.get("growth_p_h", 0.0) or 0.0)) > 0.000001
+        ))
         group.setdefault("auto_chain_x", False)
         group.setdefault("chain_shift_x", 0.0)
         group.setdefault("chain_growth_own_x", 0.0)
@@ -26758,6 +27435,165 @@ class MiniCAD(QMainWindow):
             for row in rows:
                 print(row)
         print("=" * 90 + "\n")
+
+    def auto_layout_dimension_ratio(self, bbox, bounds, axis):
+        min_x, min_y, max_x, max_y = bounds
+        if axis == "x":
+            total = max(max_x - min_x, 0.0001)
+            return max((bbox[2] - bbox[0]) / total, 0.0)
+        total = max(max_y - min_y, 0.0001)
+        return max((bbox[3] - bbox[1]) / total, 0.0)
+
+    def seed_auto_layout_growth(self):
+        bounds = self.get_non_text_dxf_bounds()
+        min_x, min_y, max_x, max_y = bounds
+        if min_x is None:
+            return []
+
+        width = max(max_x - min_x, 0.0001)
+        height = max(max_y - min_y, 0.0001)
+        edge_tol_x = max(width * 0.025, 2.0)
+        edge_tol_y = max(height * 0.025, 2.0)
+        rows = [
+            "AUTO LAYOUT SEED / start growth detection",
+            f"bounds: minX={min_x:.3f}, maxX={max_x:.3f}, minY={min_y:.3f}, maxY={max_y:.3f}",
+        ]
+
+        for group in self.parametric_groups:
+            bbox = self.group_original_bbox(group)
+            if not bbox:
+                continue
+            self.ensure_topology_fields(group)
+            bx1, by1, bx2, by2 = bbox
+            ratio_x = self.auto_layout_dimension_ratio(bbox, bounds, "x")
+            ratio_y = self.auto_layout_dimension_ratio(bbox, bounds, "y")
+
+            axis = self.project_meta.get("growth_axis", "both")
+            if axis == "width":
+                grow_x, grow_y = True, False
+            elif axis == "height":
+                grow_x, grow_y = False, True
+            elif axis == "fixed":
+                grow_x, grow_y = False, False
+            else:
+                grow_x = ratio_x >= 0.55
+                grow_y = ratio_y >= 0.55
+            group["link_x"] = "X = W"
+            group["link_y"] = "Y = H"
+            group["shift_dir_x"] = "Вправо"
+            group["shift_dir_y"] = "Вгору"
+            group["growth_p_w"] = 1.0 if grow_x else 0.0
+            group["growth_p_h"] = 1.0 if grow_y else 0.0
+
+            if grow_x:
+                if abs(bx1 - min_x) <= edge_tol_x:
+                    group["growth_dir_x"] = "Вправо"
+                elif abs(bx2 - max_x) <= edge_tol_x:
+                    group["growth_dir_x"] = "Вліво"
+                else:
+                    group["growth_dir_x"] = "Центр"
+            else:
+                group["growth_dir_x"] = "Центр"
+
+            if grow_y:
+                if abs(by1 - min_y) <= edge_tol_y:
+                    group["growth_dir_y"] = "Вгору"
+                elif abs(by2 - max_y) <= edge_tol_y:
+                    group["growth_dir_y"] = "Вниз"
+                else:
+                    group["growth_dir_y"] = "Центр"
+            else:
+                group["growth_dir_y"] = "Центр"
+
+            group["auto_layout"] = True
+            group["auto_layout_ratio_x"] = round(float(ratio_x), 6)
+            group["auto_layout_ratio_y"] = round(float(ratio_y), 6)
+            rows.append(
+                f"{group.get('name')} uid={self.get_group_key(group)}: "
+                f"ratioX={ratio_x:.3f}, ratioY={ratio_y:.3f}, "
+                f"growthX={group['growth_p_w']:.1f} dirX={group['growth_dir_x']}, "
+                f"growthY={group['growth_p_h']:.1f} dirY={group['growth_dir_y']}"
+            )
+        return rows
+
+    def finish_auto_layout_position_rules(self):
+        bounds = self.get_non_text_dxf_bounds()
+        min_x, min_y, max_x, max_y = bounds
+        if min_x is None:
+            return []
+
+        width = max(max_x - min_x, 0.0001)
+        height = max(max_y - min_y, 0.0001)
+        edge_tol_x = max(width * 0.025, 2.0)
+        edge_tol_y = max(height * 0.025, 2.0)
+        rows = ["AUTO LAYOUT FINISH / position shifts for fixed groups"]
+
+        for group in self.parametric_groups:
+            bbox = self.group_original_bbox(group)
+            if not bbox:
+                continue
+            bx1, by1, bx2, by2 = bbox
+            cx = (bx1 + bx2) * 0.5
+            cy = (by1 + by2) * 0.5
+
+            if abs(float(group.get("growth_p_w", 0.0) or 0.0)) <= 0.000001:
+                if abs(bx1 - min_x) <= edge_tol_x:
+                    k_w = 0.0
+                    reason_x = "left edge"
+                elif abs(bx2 - max_x) <= edge_tol_x:
+                    k_w = 1.0
+                    reason_x = "right edge"
+                else:
+                    k_w = (cx - min_x) / width
+                    reason_x = "relative center X"
+                group["k_w"] = round(float(max(0.0, min(1.0, k_w))), 6)
+                group["link_x"] = "X = W"
+                group["shift_dir_x"] = "Вправо"
+                rows.append(f"{group.get('name')}: k_w={group['k_w']:.6f} ({reason_x})")
+
+            if abs(float(group.get("growth_p_h", 0.0) or 0.0)) <= 0.000001:
+                if abs(by1 - min_y) <= edge_tol_y:
+                    k_h = 0.0
+                    reason_y = "bottom edge"
+                elif abs(by2 - max_y) <= edge_tol_y:
+                    k_h = 1.0
+                    reason_y = "top edge"
+                else:
+                    k_h = (cy - min_y) / height
+                    reason_y = "relative center Y"
+                group["k_h"] = round(float(max(0.0, min(1.0, k_h))), 6)
+                group["link_y"] = "Y = H"
+                group["shift_dir_y"] = "Вгору"
+                rows.append(f"{group.get('name')}: k_h={group['k_h']:.6f} ({reason_y})")
+
+        return rows
+
+    def auto_layout_all_groups(self):
+        valid_groups = [g for g in self.parametric_groups if self.group_original_bbox(g)]
+        if not valid_groups:
+            self.lbl_status_calc.setText("<font color='red'>Немає параметричних груп з геометрією для авторозстановки.</font>")
+            return
+
+        self.record_action_snapshot()
+        rows = ["AUTHOROZSTAVYTY ALL / Авторозставити все"]
+        rows.extend(self.seed_auto_layout_growth())
+
+        self.suppress_auto_chain_snapshot = True
+        try:
+            self.auto_chain_growth_x()
+            self.auto_chain_growth_y()
+        finally:
+            self.suppress_auto_chain_snapshot = False
+
+        rows.extend(self.finish_auto_layout_position_rules())
+        rows.append("Done: old k/growth coefficients are filled automatically; manual controls remain available.")
+
+        self.save_project_config()
+        self.load_groups_into_list()
+        self.on_group_selection_changed()
+        self.update_viewer()
+        self.topology_debug_print("AUTHOROZSTAVYTY ALL / Авторозставити все", rows)
+        self.lbl_status_calc.setText("<font color='#a5d6a7'>Авторозставлення виконано: ріст і зсуви заповнені автоматично.</font>")
 
     def auto_chain_growth_y(self):
         """
@@ -26968,7 +27804,8 @@ class MiniCAD(QMainWindow):
         else:
             rows.append("INFO: знайдена тільки одна сторона або тільки центр; порівнювати LEFT/RIGHT немає з чим.")
 
-        self.record_action_snapshot()
+        if not getattr(self, "suppress_auto_chain_snapshot", False):
+            self.record_action_snapshot()
 
         def scale_levels(levels, current_sum, target_sum, side_name):
             if target_sum is None or abs(current_sum - target_sum) <= balance_tolerance:
@@ -27315,7 +28152,8 @@ class MiniCAD(QMainWindow):
         else:
             rows.append("OK: Сумарний ріст лівої і правої сторони однаковий у межах допуску.")
 
-        self.record_action_snapshot()
+        if not getattr(self, "suppress_auto_chain_snapshot", False):
+            self.record_action_snapshot()
 
         def scale_side(items, current_sum, target_sum, side_name):
             if target_sum is None or abs(current_sum - target_sum) <= balance_tolerance:
@@ -27803,14 +28641,16 @@ class MiniCAD(QMainWindow):
                 extra[uid] = 0.0
 
         if len(uid_to_bbox) < 2:
-            print("[TOUCH DEBUG] Not enough groups for touch correction")
+            if self.debug_output:
+                print("[TOUCH DEBUG] Not enough groups for touch correction")
             return extra
 
-        print("\n" + "=" * 90)
-        print("[TOUCH DEBUG] START TOUCH Y CORRECTION")
-        for _uid, _bbox in uid_to_bbox.items():
-            _g = uid_to_group[_uid]
-            print(f"[TOUCH DEBUG] before uid={_uid}; name={_g.get('name')}; bbox={tuple(round(v,3) for v in _bbox)}; enabled={_g.get('touch_y_enabled')}; to={_g.get('touch_to_uid')}; gap={_g.get('touch_gap_y')}")
+        if self.debug_output:
+            print("\n" + "=" * 90)
+            print("[TOUCH DEBUG] START TOUCH Y CORRECTION")
+            for _uid, _bbox in uid_to_bbox.items():
+                _g = uid_to_group[_uid]
+                print(f"[TOUCH DEBUG] before uid={_uid}; name={_g.get('name')}; bbox={tuple(round(v,3) for v in _bbox)}; enabled={_g.get('touch_y_enabled')}; to={_g.get('touch_to_uid')}; gap={_g.get('touch_gap_y')}")
 
         # Проходимо знизу вгору, щоб верхні деталі піднімались/опускались разом з тими, до кого вони прив'язані.
         sorted_groups = sorted(uid_to_group.values(), key=self.group_center_y)
@@ -27831,11 +28671,12 @@ class MiniCAD(QMainWindow):
                 correction = wanted_upper_min_y - upper_bbox[1]
 
                 if abs(correction) > 0.001:
-                    print(
-                        f"[TOUCH DEBUG] lower={lower_uid} -> upper={upper_uid}; "
-                        f"wanted_gap={wanted_gap:.3f}; lower_top={lower_bbox[3]:.3f}; "
-                        f"upper_min_before={upper_bbox[1]:.3f}; correction={correction:.3f}"
-                    )
+                    if self.debug_output:
+                        print(
+                            f"[TOUCH DEBUG] lower={lower_uid} -> upper={upper_uid}; "
+                            f"wanted_gap={wanted_gap:.3f}; lower_top={lower_bbox[3]:.3f}; "
+                            f"upper_min_before={upper_bbox[1]:.3f}; correction={correction:.3f}"
+                        )
                     uid_to_bbox[upper_uid][1] += correction
                     uid_to_bbox[upper_uid][3] += correction
                     extra[upper_uid] = extra.get(upper_uid, 0.0) + correction
@@ -27843,8 +28684,9 @@ class MiniCAD(QMainWindow):
             if not changed:
                 break
 
-        print(f"[TOUCH DEBUG] extra result={extra}")
-        print("=" * 90 + "\n")
+        if self.debug_output:
+            print(f"[TOUCH DEBUG] extra result={extra}")
+            print("=" * 90 + "\n")
         return extra
 
     def process_parametric_percentage_scale(self, save_result=True, record_history=True):
@@ -27874,21 +28716,23 @@ class MiniCAD(QMainWindow):
 
         delta_w = target_w - cur_w
         delta_h = target_h - cur_h
-        print("\n" + "=" * 90)
-        print("[RECALC DEBUG] START GLOBAL PARAMETRIC RECALC")
-        print(f"[RECALC DEBUG] cur_w={cur_w}, target_w={target_w}, delta_w={delta_w}")
-        print(f"[RECALC DEBUG] cur_h={cur_h}, target_h={target_h}, delta_h={delta_h}")
-        print("[RECALC DEBUG] Groups:")
-        for _g in self.parametric_groups:
-            _uid = self.get_group_key(_g)
-            print(
-                f"  uid={_uid}; name={_g.get('name')}; "
-                f"k_w={_g.get('k_w')}; growth_p_w={_g.get('growth_p_w')}; dir_x={_g.get('growth_dir_x')}; link_x={_g.get('link_x')}; "
-                f"k_h={_g.get('k_h')}; growth_p_h={_g.get('growth_p_h')}; dir_y={_g.get('growth_dir_y')}; link_y={_g.get('link_y')}; "
-                f"auto_chain_y={_g.get('auto_chain_y')}; chain_shift_y={_g.get('chain_shift_y')}; chain_growth_after_y={_g.get('chain_growth_after_y')}"
-            )
+        if self.debug_output:
+            print("\n" + "=" * 90)
+            print("[RECALC DEBUG] START GLOBAL PARAMETRIC RECALC")
+            print(f"[RECALC DEBUG] cur_w={cur_w}, target_w={target_w}, delta_w={delta_w}")
+            print(f"[RECALC DEBUG] cur_h={cur_h}, target_h={target_h}, delta_h={delta_h}")
+            print("[RECALC DEBUG] Groups:")
+            for _g in self.parametric_groups:
+                _uid = self.get_group_key(_g)
+                print(
+                    f"  uid={_uid}; name={_g.get('name')}; "
+                    f"k_w={_g.get('k_w')}; growth_p_w={_g.get('growth_p_w')}; dir_x={_g.get('growth_dir_x')}; link_x={_g.get('link_x')}; "
+                    f"k_h={_g.get('k_h')}; growth_p_h={_g.get('growth_p_h')}; dir_y={_g.get('growth_dir_y')}; link_y={_g.get('link_y')}; "
+                    f"auto_chain_y={_g.get('auto_chain_y')}; chain_shift_y={_g.get('chain_shift_y')}; chain_growth_after_y={_g.get('chain_growth_after_y')}"
+                )
         touch_extra_y = self.calculate_touch_extra_y_shifts(cur_w, cur_h, target_w, target_h)
-        print(f"[RECALC DEBUG] touch_extra_y={touch_extra_y}")
+        if self.debug_output:
+            print(f"[RECALC DEBUG] touch_extra_y={touch_extra_y}")
         self.project_meta["source_width"] = cur_w
         self.project_meta["source_height"] = cur_h
         self.project_meta["target_width"] = target_w
@@ -27919,20 +28763,22 @@ class MiniCAD(QMainWindow):
                 continue
 
             shift_v, growth_v = ParametricEngine.get_transform(delta_w, delta_h, associated_group)
-            print(
-                f"[RECALC DEBUG] handle={hndl}; type={orig.get('type')}; "
-                f"group={associated_group.get('name')} uid={self.get_group_key(associated_group)}; "
-                f"base_shift=(x={shift_v[0]:.3f}, y={shift_v[1]:.3f}); "
-                f"growth=(x={growth_v[0]:.3f}, y={growth_v[1]:.3f}); "
-                f"k_w={associated_group.get('k_w')}; k_h={associated_group.get('k_h')}; "
-                f"shift_dir_x={associated_group.get('shift_dir_x')}; shift_dir_y={associated_group.get('shift_dir_y')}; "
-                f"growth_p_w={associated_group.get('growth_p_w')}; growth_p_h={associated_group.get('growth_p_h')}"
-            )
+            if self.debug_output:
+                print(
+                    f"[RECALC DEBUG] handle={hndl}; type={orig.get('type')}; "
+                    f"group={associated_group.get('name')} uid={self.get_group_key(associated_group)}; "
+                    f"base_shift=(x={shift_v[0]:.3f}, y={shift_v[1]:.3f}); "
+                    f"growth=(x={growth_v[0]:.3f}, y={growth_v[1]:.3f}); "
+                    f"k_w={associated_group.get('k_w')}; k_h={associated_group.get('k_h')}; "
+                    f"shift_dir_x={associated_group.get('shift_dir_x')}; shift_dir_y={associated_group.get('shift_dir_y')}; "
+                    f"growth_p_w={associated_group.get('growth_p_w')}; growth_p_h={associated_group.get('growth_p_h')}"
+                )
            
             group_uid = self.get_group_key(associated_group)
             extra_y = touch_extra_y.get(group_uid, 0.0)
             if abs(extra_y) > 0.0001:
-                print(f"[RECALC DEBUG]   touch correction extra_y={extra_y:.3f} applied to group uid={group_uid}")
+                if self.debug_output:
+                    print(f"[RECALC DEBUG]   touch correction extra_y={extra_y:.3f} applied to group uid={group_uid}")
                 shift_v = (shift_v[0], shift_v[1] + extra_y, shift_v[2])
             
             growth_dir_x = associated_group.get("growth_dir_x", "Центр")
@@ -28019,7 +28865,8 @@ class MiniCAD(QMainWindow):
         self.apply_door_text_to_doc()
         if save_result:
             self.doc.saveas(self.dxf_path)
-        self.save_project_config()
+        if not getattr(self, "suppress_project_config_save", False):
+            self.save_project_config()
         if should_record:
             self.history.save_state()
             self.save_zones_history_state()
@@ -28092,13 +28939,14 @@ class MiniCAD(QMainWindow):
 
         self.save_original_geometries()
 
-        print("\n" + "=" * 90)
-        print("[BASE DEBUG] PARAMETRIC BASE UPDATED")
-        print(f"[BASE DEBUG] reason={reason}")
-        print(f"[BASE DEBUG] source kept : W={old_source_w}, H={old_source_h}")
-        print(f"[BASE DEBUG] target kept : W={old_target_w}, H={old_target_h}")
-        print(f"[BASE DEBUG] original_geometries handles={len(self.original_geometries)}")
-        print("=" * 90)
+        if self.debug_output:
+            print("\n" + "=" * 90)
+            print("[BASE DEBUG] PARAMETRIC BASE UPDATED")
+            print(f"[BASE DEBUG] reason={reason}")
+            print(f"[BASE DEBUG] source kept : W={old_source_w}, H={old_source_h}")
+            print(f"[BASE DEBUG] target kept : W={old_target_w}, H={old_target_h}")
+            print(f"[BASE DEBUG] original_geometries handles={len(self.original_geometries)}")
+            print("=" * 90)
 
 
     def save_original_geometries(self):
@@ -28442,7 +29290,9 @@ class MiniCAD(QMainWindow):
                         importer.finalize()
                     except Exception as e: print(f"Помилка злиття: {e}")
 
+        self.load_folder_config()
         self.load_project_config()
+        self.prompt_source_dimensions_on_open()
         self.update_dimension_inputs_from_meta()
         self.history = HistoryManager(self.dxf_path)
         self.history.save_state()

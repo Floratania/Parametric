@@ -2,14 +2,14 @@
     "meta": {
         "source_width": 2040.0,
         "source_height": 860.0,
-        "target_width": 2000.0,
-        "target_height": 800.0,
+        "target_width": 2060.0,
+        "target_height": 200.0,
         "keep_blocks": [
-            "рама верхня|92",
-            "фікс|8F"
+            "рама верхня|92"
         ],
         "delete_blocks": [],
         "door_opening": "left",
+        "growth_axis": "both",
         "door_text": {
             "enabled": false,
             "text": "",
@@ -37,22 +37,15 @@
             "growth_dir_y": "Центр",
             "link_x": "X = W",
             "link_y": "Y = H",
-            "uid": "рама верхня|92"
-        },
-        {
-            "name": "фікс",
-            "handles": [
-                "8F"
-            ],
-            "k_w": 0.0,
-            "k_h": 1.0,
-            "growth_p_w": 0.0,
-            "growth_p_h": 0.0,
-            "growth_dir_x": "Вліво",
-            "growth_dir_y": "Центр",
-            "link_x": "X = W",
-            "link_y": "Y = H",
-            "uid": "фікс|8F"
+            "uid": "рама верхня|92",
+            "shift_dir_x": "Вправо",
+            "shift_dir_y": "Вгору",
+            "role_y": "manual",
+            "auto_rule": false,
+            "touch_y_enabled": false,
+            "touch_to_uid": null,
+            "touch_gap_y": 0.0,
+            "resizes": false
         }
     ]
 }
