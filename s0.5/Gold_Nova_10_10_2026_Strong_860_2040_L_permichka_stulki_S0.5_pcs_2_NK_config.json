@@ -1,12 +1,16 @@
 {
     "meta": {
-        "source_width": 791.2,
-        "source_height": 118.96007008800001,
-        "target_width": null,
-        "target_height": null,
+        "source_width": 2040.0,
+        "source_height": 860.0,
+        "target_width": 2060.0,
+        "target_height": 880.0,
         "keep_blocks": [],
         "delete_blocks": [],
         "door_opening": "right",
+        "source_door_opening": "left",
+        "target_door_opening": "left",
+        "growth_axis": "both",
+        "axis_link_mode": "normal",
         "door_text": {
             "enabled": false,
             "text": "",

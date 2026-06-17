@@ -30,7 +30,7 @@ import sys
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
 
-from cad_window import MiniCAD
+from cad_window_2 import MiniCAD
 
 
 def main():
@@ -38,7 +38,7 @@ def main():
 
     window = MiniCAD()
 
-    # Автоматичне фокусування камери на габаритах дверного полотна
+  
     window.view.fitInView(
         window.scene.itemsBoundingRect(),
         Qt.AspectRatioMode.KeepAspectRatio
@@ -46,7 +46,7 @@ def main():
 
     window.show()
 
-    # Відповідно до стандартів PySide6 / Qt6 exec() викликається напряму
+   
     sys.exit(app.exec())
 
 

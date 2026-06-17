@@ -3,7 +3,7 @@
         "source_width": 2040.0,
         "source_height": 860.0,
         "target_width": 2060.0,
-        "target_height": 960.0,
+        "target_height": 880.0,
         "keep_blocks": [
             "фікс|111,112,113,114,115,116,117,118,119,11A,11B,11C,11D,11E,11F,120,121,122,123,124,125,126,127,128,129,12A,12B,12C,12D,12E,13B,13C,13D,13E,13F,140,141,142,143,144,145,146,147,148,149,14A,14B,14C,14D,14E,151,152,153,154,155,156,157,158,159,15A,15B,15C,15D,15E,15F,160,161,162,163,164,165,166,167,168,169,16C,16D,16E,16F,7B,7D,7E,7F,80,81,83,84,85,86,87,89,8A,8B,C1,DA,DB,F0,F2,F4,F5,F6,F7,F9,FA,FB",
             "глазок|14F,150,16A,16B",
@@ -16,14 +16,14 @@
             "рама нижня|13A"
         ],
         "delete_blocks": [],
-        "door_opening": "right",
+        "door_opening": "left",
         "source_door_opening": "left",
         "target_door_opening": "left",
         "growth_axis": "both",
         "door_text": {
             "enabled": false,
             "text": "",
-            "x": 474.56,
+            "x": 470.88,
             "y": 1349.24,
             "height": 30.0,
             "width_factor": 90.0,
@@ -156,7 +156,7 @@
             "touch_y_enabled": false,
             "touch_to_uid": null,
             "touch_gap_y": 0.0,
-            "shift_dir_x": "Вліво",
+            "shift_dir_x": "Вправо",
             "shift_dir_y": "Вгору",
             "resizes": false
         },
@@ -182,7 +182,7 @@
             "touch_y_enabled": false,
             "touch_to_uid": null,
             "touch_gap_y": 0.0,
-            "shift_dir_x": "Вліво",
+            "shift_dir_x": "Вправо",
             "shift_dir_y": "Вгору",
             "resizes": false
         },
@@ -212,7 +212,7 @@
             "touch_y_enabled": false,
             "touch_to_uid": null,
             "touch_gap_y": 0.0,
-            "shift_dir_x": "Вліво",
+            "shift_dir_x": "Вправо",
             "shift_dir_y": "Вгору",
             "resizes": false
         },
@@ -224,9 +224,9 @@
             "k_w": 0.0,
             "k_h": 0.0,
             "growth_p_w": 0.0,
-            "growth_p_h": 1.0,
+            "growth_p_h": 0.0,
             "growth_dir_x": "Центр",
-            "growth_dir_y": "Вгору",
+            "growth_dir_y": "Центр",
             "link_x": "X = W",
             "link_y": "Y = H",
             "uid": "рама ліва|12F",
@@ -235,7 +235,7 @@
             "touch_y_enabled": false,
             "touch_to_uid": null,
             "touch_gap_y": 0.0,
-            "shift_dir_x": "Вліво",
+            "shift_dir_x": "Вправо",
             "shift_dir_y": "Вгору",
             "resizes": true
         },
@@ -258,7 +258,7 @@
             "touch_y_enabled": false,
             "touch_to_uid": null,
             "touch_gap_y": 0.0,
-            "shift_dir_x": "Вліво",
+            "shift_dir_x": "Вправо",
             "shift_dir_y": "Вгору",
             "resizes": true
         },
@@ -294,7 +294,7 @@
             "touch_y_enabled": false,
             "touch_to_uid": null,
             "touch_gap_y": 0.0,
-            "shift_dir_x": "Вліво",
+            "shift_dir_x": "Вправо",
             "shift_dir_y": "Вгору",
             "resizes": false
         },
@@ -308,7 +308,7 @@
             "growth_p_w": 0.0,
             "growth_p_h": 1.0,
             "growth_dir_x": "Центр",
-            "growth_dir_y": "Вгору",
+            "growth_dir_y": "Центр",
             "link_x": "X = W",
             "link_y": "Y = H",
             "uid": "рама права|136",
@@ -317,7 +317,7 @@
             "touch_y_enabled": false,
             "touch_to_uid": null,
             "touch_gap_y": 0.0,
-            "shift_dir_x": "Вліво",
+            "shift_dir_x": "Вправо",
             "shift_dir_y": "Вгору",
             "resizes": true
         },
@@ -362,7 +362,7 @@
             "touch_y_enabled": false,
             "touch_to_uid": null,
             "touch_gap_y": 0.0,
-            "shift_dir_x": "Вліво",
+            "shift_dir_x": "Вправо",
             "shift_dir_y": "Вгору",
             "resizes": false
         },
@@ -385,7 +385,7 @@
             "touch_y_enabled": false,
             "touch_to_uid": null,
             "touch_gap_y": 0.0,
-            "shift_dir_x": "Вліво",
+            "shift_dir_x": "Вправо",
             "shift_dir_y": "Вгору",
             "resizes": true
         }

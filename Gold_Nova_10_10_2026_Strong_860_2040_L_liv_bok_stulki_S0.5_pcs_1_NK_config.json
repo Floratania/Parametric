@@ -2,16 +2,21 @@
     "meta": {
         "source_width": 2040.0,
         "source_height": 860.0,
-        "target_width": 2060.000000000001,
+        "target_width": 2060.0,
         "target_height": 200.0,
-        "keep_blocks": [],
+        "keep_blocks": [
+            "1|73,77,7F,80,95,96,99",
+            "2|97,9B"
+        ],
         "delete_blocks": [],
-        "door_opening": "left",
-        "growth_axis": "both",
+        "door_opening": "right",
+        "source_door_opening": "left",
+        "target_door_opening": "left",
+        "growth_axis": "width",
         "door_text": {
             "enabled": false,
             "text": "",
-            "x": 0.0,
+            "x": 1864.0,
             "y": 0.0,
             "height": 30.0,
             "width_factor": 120.0,
@@ -20,5 +25,61 @@
             "handle": null
         }
     },
-    "groups": []
+    "groups": [
+        {
+            "name": "1",
+            "handles": [
+                "73",
+                "96",
+                "77",
+                "80",
+                "7F",
+                "95",
+                "99"
+            ],
+            "k_w": 1.0,
+            "k_h": 0.0,
+            "growth_p_w": 0.0,
+            "growth_p_h": 0.0,
+            "growth_dir_x": "Центр",
+            "growth_dir_y": "Центр",
+            "shift_dir_x": "Вліво",
+            "shift_dir_y": "Вгору",
+            "link_x": "X = H",
+            "link_y": "Y = W",
+            "growth_axis": "both",
+            "resizes": false,
+            "role_y": "manual",
+            "auto_rule": false,
+            "touch_y_enabled": false,
+            "touch_to_uid": null,
+            "touch_gap_y": 0.0,
+            "uid": "1|73,77,7F,80,95,96,99"
+        },
+        {
+            "name": "2",
+            "handles": [
+                "9B",
+                "97"
+            ],
+            "k_w": 0.0,
+            "k_h": 0.0,
+            "growth_p_w": 0.0,
+            "growth_p_h": 0.0,
+            "growth_dir_x": "Центр",
+            "growth_dir_y": "Центр",
+            "shift_dir_x": "Вліво",
+            "shift_dir_y": "Вгору",
+            "link_x": "X = H",
+            "link_y": "Y = W",
+            "growth_axis": "both",
+            "resizes": true,
+            "role_y": "manual",
+            "auto_rule": false,
+            "touch_y_enabled": false,
+            "touch_to_uid": null,
+            "touch_gap_y": 0.0,
+            "uid": "2|97,9B"
+        }
+    ]
 }

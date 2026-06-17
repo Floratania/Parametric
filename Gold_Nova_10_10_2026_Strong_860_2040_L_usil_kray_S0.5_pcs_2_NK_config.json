@@ -15,9 +15,12 @@
         ],
         "delete_blocks": [],
         "door_opening": "right",
+        "source_door_opening": "left",
+        "target_door_opening": "left",
         "growth_axis": "both",
+        "axis_link_mode": "normal",
         "door_text": {
-            "enabled": false,
+            "enabled": true,
             "text": "",
             "x": 101.89,
             "y": 368.5,
@@ -32,19 +35,19 @@
         {
             "name": "2",
             "handles": [
+                "99",
                 "9B",
-                "A5",
+                "75",
+                "9A",
+                "78",
                 "A6",
                 "76",
-                "75",
-                "A4",
-                "9C",
-                "99",
-                "9A",
                 "7B",
+                "A5",
+                "9C",
                 "77",
-                "A3",
-                "78"
+                "A4",
+                "A3"
             ],
             "k_w": 0.0,
             "k_h": 0.0,
@@ -84,10 +87,10 @@
         {
             "name": "сер",
             "handles": [
-                "9E",
-                "9D",
                 "A7",
-                "A8"
+                "A8",
+                "9D",
+                "9E"
             ],
             "k_w": 0.0,
             "k_h": 0.5,
@@ -127,19 +130,19 @@
         {
             "name": "верх",
             "handles": [
-                "79",
-                "A2",
-                "7A",
-                "73",
                 "74",
-                "AB",
-                "7C",
+                "AC",
+                "A0",
                 "9F",
                 "A1",
-                "A9",
                 "AA",
-                "AC",
-                "A0"
+                "73",
+                "A9",
+                "79",
+                "AB",
+                "A2",
+                "7A",
+                "7C"
             ],
             "k_w": 0.0,
             "k_h": 1.0,

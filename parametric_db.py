@@ -56,22 +56,36 @@ class ParametricDb:
         self._check_connection()
 
     def candidate_connection_strings(self):
+        # Якщо рядок було явно передано при ініціалізації, використовуємо тільки його
         if self.connection_string:
             return [self.connection_string]
+            
+        # Якщо ні — перебираємо всі доступні варіанти (локальні та серверні)
         return [
+            # 1. Новий сервер srv2 (Авторизація за логіном/паролем)
+            (
+                "DRIVER={SQL Server};"
+                "SERVER=prog-srv;"
+                "DATABASE=parametric_db;"
+                "UID=sa;"
+                "PWD=*Htlbcrf2oo6;"
+            ),
+            # 2. Робочий сервер (ODBC 18, Trusted Connection)
             (
                 "DRIVER={ODBC Driver 18 for SQL Server};"
-                "SERVER=localhost;"
+                "SERVER=prog-srv;"
                 "DATABASE=parametric_db;"
                 "Trusted_Connection=yes;"
                 "TrustServerCertificate=yes;"
             ),
+            # 3. Локальний сервер (ODBC 17)
             (
                 "DRIVER={ODBC Driver 17 for SQL Server};"
                 "SERVER=localhost;"
                 "DATABASE=parametric_db;"
                 "Trusted_Connection=yes;"
             ),
+            # 4. Локальний сервер (Старий базовий драйвер)
             (
                 "DRIVER={SQL Server};"
                 "SERVER=localhost;"
@@ -79,6 +93,9 @@ class ParametricDb:
                 "Trusted_Connection=yes;"
             ),
         ]
+
+  
+
 
     def connect(self):
         if pyodbc is None:

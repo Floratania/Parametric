@@ -8,8 +8,6 @@ import re
 import zipfile
 import xml.etree.ElementTree as ET
 from PySide6.QtGui import QShortcut, QKeySequence
-from parametric_db import LoginDialog, ParametricDb
-import table_io
 
 import ezdxf
 import ezdxf.bbox as dxf_bbox
@@ -22,7 +20,7 @@ from PySide6.QtWidgets import (
     QListWidget, QListWidgetItem, QPushButton, QCheckBox,
     QGroupBox, QGraphicsRectItem, QComboBox, QLineEdit, QGraphicsView, 
     QGraphicsScene, QAbstractItemView, QGraphicsEllipseItem, QInputDialog, QFileDialog, QMessageBox,
-    QGridLayout, QGraphicsTextItem, QGraphicsSimpleTextItem, QGraphicsItem, QTabWidget
+    QGridLayout, QGraphicsTextItem, QGraphicsSimpleTextItem, QGraphicsItem
 )
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QColor, QBrush, QPen, QPainterPath, QPainter, QGuiApplication
@@ -223,8 +221,6 @@ class MiniCAD(QMainWindow):
         self.project_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in locals() else os.getcwd()
         self.dxf_path = os.path.join(self.project_dir, "drawing.DXF")
         self.debug_output = False
-        self.db = ParametricDb()
-        self.current_user = None
         self.current_theme = "Темна"
 
         self.selected_handles = set()
@@ -245,7 +241,6 @@ class MiniCAD(QMainWindow):
             "source_door_opening": "left",
             "target_door_opening": "left",
             "growth_axis": "both",
-            "axis_link_mode": "normal",
             "door_text": {
                 "enabled": False,
                 "text": "",
@@ -277,8 +272,6 @@ class MiniCAD(QMainWindow):
         self.save_zones_history_state()
 
         self.init_ui()
-        if not self.authenticate_user():
-            sys.exit(0)
         self.setup_shortcuts()
         self.update_dimension_inputs_from_meta()
         self.set_interface_theme(self.current_theme)
@@ -379,7 +372,6 @@ class MiniCAD(QMainWindow):
             "source_door_opening": "left",
             "target_door_opening": "left",
             "growth_axis": "both",
-            "axis_link_mode": "normal",
             "door_text": self.default_text_settings()
         }
 
@@ -401,78 +393,6 @@ class MiniCAD(QMainWindow):
             handles_key = ",".join(sorted(str(h) for h in group.get("handles", [])))
             group["uid"] = f"{group.get('name', 'group')}|{handles_key}"
         return group["uid"]
-
-    def authenticate_user(self):
-        if not self.db.available:
-            self.lbl_status_calc.setText(
-                f"<font color='#ff9800'>БД недоступна, робота офлайн: {self.db.last_error}</font>"
-            )
-            self.update_file_status_panel()
-            return True
-
-        message = "Увійдіть у базу parametric_db. Якщо користувачів ще немає, перший вхід створить адміністратора."
-        while True:
-            dialog = LoginDialog(self, message)
-            if dialog.exec() != LoginDialog.DialogCode.Accepted:
-                return False
-            username, password = dialog.credentials()
-            try:
-                user = self.db.authenticate(username, password)
-            except Exception as exc:
-                QMessageBox.warning(self, "База даних", f"Помилка авторизації:\n{exc}")
-                return False
-            if user:
-                self.current_user = user
-                self.setWindowTitle(f"{self.windowTitle()} | {user.get('username')}")
-                self.lbl_status_calc.setText(
-                    f"<font color='#a5d6a7'>БД підключена. Користувач: {user.get('username')}</font>"
-                )
-                self.save_current_project_to_db("Opened")
-                self.update_file_status_panel()
-                return True
-            QMessageBox.warning(self, "Авторизація", "Невірний логін або пароль.")
-
-    def current_user_id(self):
-        if not self.current_user:
-            return None
-        return self.current_user.get("id")
-
-    def save_current_project_to_db(self, status="ConfigSaved"):
-        if not getattr(self, "db", None) or not self.current_user_id():
-            return
-        ok = self.db.save_project_snapshot(
-            self.project_dir,
-            self.dxf_path,
-            self.get_project_config_path(),
-            self.project_meta,
-            self.parametric_groups,
-            self.current_user_id(),
-            status,
-        )
-        if not ok and hasattr(self, "lbl_status_calc"):
-            self.lbl_status_calc.setText(
-                f"<font color='#ff9800'>JSON збережено, але БД не прийняла запис: {self.db.last_error}</font>"
-            )
-
-    def save_export_to_db(self, export_path, status="Exported"):
-        if not getattr(self, "db", None) or not self.current_user_id():
-            return
-        export_meta = copy.deepcopy(self.project_meta)
-        target_opening = self.export_target_opening()
-        export_meta["source_width"] = export_meta.get("target_width")
-        export_meta["source_height"] = export_meta.get("target_height")
-        export_meta["source_door_opening"] = target_opening
-        export_meta["target_door_opening"] = target_opening
-        export_meta["door_opening"] = target_opening
-        self.db.save_project_snapshot(
-            os.path.dirname(export_path),
-            export_path,
-            f"{os.path.splitext(export_path)[0]}_config.json",
-            export_meta,
-            self.parametric_groups,
-            self.current_user_id(),
-            status,
-        )
     
     def select_all_entities(self):
         self.selected_handles.clear()
@@ -585,7 +505,6 @@ class MiniCAD(QMainWindow):
             else:
                 self.block_keep_state[key] = True
             self.apply_growth_axis_to_group(group)
-        self.apply_axis_link_mode_to_groups()
         self.apply_folder_dimensions_to_meta()
 
     def save_project_config(self):
@@ -608,7 +527,6 @@ class MiniCAD(QMainWindow):
         try:
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4, ensure_ascii=False)
-            self.save_current_project_to_db("ConfigSaved")
         except Exception as e:
             print(f"Помилка збереження конфігурації JSON: {e}")
 
@@ -654,47 +572,6 @@ class MiniCAD(QMainWindow):
         self.scroll_area.setWidget(control_panel)
         self.central_layout.addWidget(self.scroll_area, stretch=4)
 
-        self.file_status_group = QGroupBox("Стан файлу")
-        file_status_box = QGridLayout()
-        self.lbl_file_status_source = QLabel("")
-        self.lbl_file_status_target = QLabel("")
-        self.lbl_file_status_opening = QLabel("")
-        self.lbl_file_status_axis = QLabel("")
-        self.lbl_file_status_db = QLabel("")
-        file_status_box.addWidget(self.lbl_file_status_source, 0, 0)
-        file_status_box.addWidget(self.lbl_file_status_target, 0, 1)
-        file_status_box.addWidget(self.lbl_file_status_opening, 1, 0)
-        file_status_box.addWidget(self.lbl_file_status_axis, 1, 1)
-        file_status_box.addWidget(self.lbl_file_status_db, 2, 0, 1, 2)
-        self.file_status_group.setLayout(file_status_box)
-        control_panel_layout.addWidget(self.file_status_group)
-
-        self.side_tabs = QTabWidget()
-        self.tab_file = QWidget()
-        self.tab_sizes = QWidget()
-        self.tab_groups = QWidget()
-        self.tab_text = QWidget()
-        self.tab_more = QWidget()
-        self.tab_file_layout = QVBoxLayout(self.tab_file)
-        self.tab_sizes_layout = QVBoxLayout(self.tab_sizes)
-        self.tab_groups_layout = QVBoxLayout(self.tab_groups)
-        self.tab_text_layout = QVBoxLayout(self.tab_text)
-        self.tab_more_layout = QVBoxLayout(self.tab_more)
-        for layout in (
-            self.tab_file_layout,
-            self.tab_sizes_layout,
-            self.tab_groups_layout,
-            self.tab_text_layout,
-            self.tab_more_layout,
-        ):
-            layout.setContentsMargins(5, 5, 5, 5)
-        self.side_tabs.addTab(self.tab_file, "Файл")
-        self.side_tabs.addTab(self.tab_sizes, "Розміри")
-        self.side_tabs.addTab(self.tab_groups, "Групи")
-        self.side_tabs.addTab(self.tab_text, "Текст")
-        self.side_tabs.addTab(self.tab_more, "Інше")
-        control_panel_layout.addWidget(self.side_tabs)
-
         inspector_group = QGroupBox("")
         inspector_box = QVBoxLayout()
         self.chk_enable_inspector = QCheckBox(" Ввімкнути інтерактивний трекер точок")
@@ -708,7 +585,7 @@ class MiniCAD(QMainWindow):
         inspector_box.addWidget(self.btn_snap_zero)
         
         inspector_group.setLayout(inspector_box)
-        self.tab_more_layout.addWidget(inspector_group)
+        control_panel_layout.addWidget(inspector_group)
 
         self.transform_group = QGroupBox("🔄 Трансформація виділених елементів (DXF)")
         self.transform_group.setStyleSheet("QGroupBox { border: 1px solid #d32f2f; }")
@@ -739,7 +616,7 @@ class MiniCAD(QMainWindow):
         transform_box.addLayout(mirror_btn_layout)
 
         self.transform_group.setLayout(transform_box)
-        self.tab_file_layout.addWidget(self.transform_group)
+        control_panel_layout.addWidget(self.transform_group)
 
         auto_scale_group = QGroupBox(" Параметрична трансформація розмірів")
         auto_scale_box = QVBoxLayout()
@@ -809,7 +686,7 @@ class MiniCAD(QMainWindow):
         # auto_scale_box.addWidget(self.btn_find_min_size)
 
         auto_scale_group.setLayout(auto_scale_box)
-        self.tab_sizes_layout.addWidget(auto_scale_group)
+        control_panel_layout.addWidget(auto_scale_group)
 
         opening_group = QGroupBox("Відкривання")
         opening_box = QHBoxLayout()
@@ -827,7 +704,7 @@ class MiniCAD(QMainWindow):
         self.btn_mirror_opening.clicked.connect(self.mirror_door_opening)
         opening_box.addWidget(self.btn_mirror_opening)
         opening_group.setLayout(opening_box)
-        self.tab_sizes_layout.addWidget(opening_group)
+        control_panel_layout.addWidget(opening_group)
 
         text_group = QGroupBox("Текст на дверях")
         text_box = QGridLayout()
@@ -900,19 +777,7 @@ class MiniCAD(QMainWindow):
         align_text_buttons.addWidget(self.btn_align_text_height)
         text_box.addLayout(align_text_buttons, 8, 0, 1, 4)
         text_group.setLayout(text_box)
-        self.text_group = text_group
-        self.text_box_layout = text_box
-        text_group.setCheckable(True)
-        text_group.toggled.connect(self.set_text_panel_expanded)
-        text_settings = self.project_meta.get("door_text", {})
-        text_open = bool(
-            text_settings.get("enabled") or
-            str(text_settings.get("text", "")).strip() or
-            text_settings.get("handle")
-        )
-        text_group.setChecked(text_open)
-        self.set_text_panel_expanded(text_open)
-        self.tab_text_layout.addWidget(text_group)
+        control_panel_layout.addWidget(text_group)
         self.sync_text_inputs_from_meta()
         self.sync_opening_inputs_from_meta()
 
@@ -925,7 +790,7 @@ class MiniCAD(QMainWindow):
         history_box.addWidget(self.btn_undo)
         history_box.addWidget(self.btn_redo)
         history_group.setLayout(history_box)
-        self.tab_file_layout.addWidget(history_group)
+        control_panel_layout.addWidget(history_group)
 
         group_constructor_group = QGroupBox(" Параметричні групи топології")
         group_box = QVBoxLayout()
@@ -1000,8 +865,6 @@ class MiniCAD(QMainWindow):
         # Рядок 1: Вісь X
         self.combo_link_x = QComboBox()
         self.combo_link_x.addItems(["X = W", "X = H"])
-        self.combo_link_x.setEnabled(False)
-        self.combo_link_x.setToolTip("Глобальна прив'язка осей для всього файлу")
         grid.addWidget(self.combo_link_x, 0, 0)
 
         grid.addWidget(QLabel("Зсув:"), 0, 1)
@@ -1027,8 +890,6 @@ class MiniCAD(QMainWindow):
         # Рядок 2: Вісь Y
         self.combo_link_y = QComboBox()
         self.combo_link_y.addItems(["Y = H", "Y = W"])
-        self.combo_link_y.setEnabled(False)
-        self.combo_link_y.setToolTip("Глобальна прив'язка осей для всього файлу")
         grid.addWidget(self.combo_link_y, 1, 0)
 
         grid.addWidget(QLabel("Зсув:"), 1, 1)
@@ -1110,14 +971,14 @@ class MiniCAD(QMainWindow):
         # -------------------------------------------------------------
 
         group_constructor_group.setLayout(group_box)
-        self.tab_groups_layout.addWidget(group_constructor_group)
+        control_panel_layout.addWidget(group_constructor_group)
 
-        self.tab_groups_layout.addWidget(QLabel("<b>Повний список ліній/отворів у файлі:</b>"))
+        control_panel_layout.addWidget(QLabel("<b>Повний список ліній/отворів у файлі:</b>"))
         self.entity_list = QListWidget()
         self.entity_list.setFixedHeight(120)
         self.entity_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.entity_list.itemSelectionChanged.connect(self.on_list_selection_changed)
-        self.tab_groups_layout.addWidget(self.entity_list)
+        control_panel_layout.addWidget(self.entity_list)
 
         theme_group = QGroupBox(" Інтерфейс")
         theme_box = QHBoxLayout()
@@ -1126,13 +987,8 @@ class MiniCAD(QMainWindow):
         self.theme_combo.currentTextChanged.connect(self.on_theme_changed)
         theme_box.addWidget(self.theme_combo)
         theme_group.setLayout(theme_box)
-        self.tab_more_layout.addWidget(theme_group)
+        control_panel_layout.addWidget(theme_group)
 
-        self.tab_file_layout.addStretch()
-        self.tab_sizes_layout.addStretch()
-        self.tab_groups_layout.addStretch()
-        self.tab_text_layout.addStretch()
-        self.tab_more_layout.addStretch()
         control_panel_layout.addStretch()
         self.update_history_buttons_state()
 
@@ -1410,28 +1266,6 @@ class MiniCAD(QMainWindow):
         self.sync_text_inputs_from_meta()
         self.sync_opening_inputs_from_meta()
         self.sync_file_growth_axis_combo()
-        self.update_file_status_panel()
-
-    def update_file_status_panel(self):
-        if not hasattr(self, "lbl_file_status_source"):
-            return
-        source_w = self.format_dimension_value(self.project_meta.get("source_width"))
-        source_h = self.format_dimension_value(self.project_meta.get("source_height"))
-        target_w = self.format_dimension_value(self.project_meta.get("target_width"))
-        target_h = self.format_dimension_value(self.project_meta.get("target_height"))
-        source_opening = self.project_meta.get("source_door_opening") or self.project_meta.get("door_opening", "left")
-        target_opening = self.project_meta.get("target_door_opening") or self.project_meta.get("door_opening", source_opening)
-        opening_names = {"left": "Ліве", "right": "Праве"}
-        link_x, link_y = self.link_pair_for_mode() if hasattr(self, "link_pair_for_mode") else ("X = W", "Y = H")
-        db_state = "online" if getattr(getattr(self, "db", None), "available", False) else "offline"
-        user = self.current_user.get("username") if getattr(self, "current_user", None) else "-"
-        self.lbl_file_status_source.setText(f"Початковий: {source_w} x {source_h}")
-        self.lbl_file_status_target.setText(f"Цільовий: {target_w} x {target_h}")
-        self.lbl_file_status_opening.setText(
-            f"Відкривання: {opening_names.get(source_opening, source_opening)} -> {opening_names.get(target_opening, target_opening)}"
-        )
-        self.lbl_file_status_axis.setText(f"Осі: {link_x}, {link_y}")
-        self.lbl_file_status_db.setText(f"БД: {db_state} | користувач: {user}")
 
     def prompt_source_dimensions_on_open(self):
         if self.folder_meta.get("source_width") is not None and self.folder_meta.get("source_height") is not None:
@@ -1560,23 +1394,6 @@ class MiniCAD(QMainWindow):
         self.block_keep_state[key] = item.checkState() == Qt.CheckState.Checked
         self.save_project_config()
 
-    def set_text_panel_expanded(self, expanded):
-        layout = getattr(self, "text_box_layout", None)
-        if not layout:
-            return
-        for index in range(layout.count()):
-            item = layout.itemAt(index)
-            widget = item.widget()
-            child_layout = item.layout()
-            if widget:
-                widget.setVisible(expanded)
-            elif child_layout:
-                for child_index in range(child_layout.count()):
-                    child_item = child_layout.itemAt(child_index)
-                    child_widget = child_item.widget()
-                    if child_widget:
-                        child_widget.setVisible(expanded)
-
     def get_text_settings(self):
         settings = self.default_text_settings()
         settings.update(self.project_meta.get("door_text", {}))
@@ -1645,14 +1462,6 @@ class MiniCAD(QMainWindow):
         self.combo_text_font.setCurrentText(str(settings.get("font", "STANDARD")))
         for widget in widgets:
             widget.blockSignals(False)
-        if hasattr(self, "text_group"):
-            should_open = bool(
-                settings.get("enabled") or
-                str(settings.get("text", "")).strip() or
-                settings.get("handle")
-            )
-            self.text_group.setChecked(should_open)
-            self.set_text_panel_expanded(should_open)
 
     def collect_text_settings_from_inputs(self):
         if not hasattr(self, "input_door_text"):
@@ -1862,14 +1671,12 @@ class MiniCAD(QMainWindow):
         self.folder_meta["source_door_opening"] = self.project_meta["source_door_opening"]
         self.save_folder_config()
         self.save_project_config()
-        self.update_file_status_panel()
 
     def on_door_opening_changed(self, text):
         self.record_action_snapshot()
         self.project_meta["target_door_opening"] = "right" if "Прав" in text else "left"
         self.project_meta["door_opening"] = self.project_meta["target_door_opening"]
         self.save_project_config()
-        self.update_file_status_panel()
 
     def get_dxf_bounds(self, doc=None):
         doc = doc or self.doc
@@ -2688,7 +2495,6 @@ class MiniCAD(QMainWindow):
         self.apply_opening_to_export_doc(export_doc)
         export_doc.saveas(export_path)
         self.save_generated_project_config(export_path, target_w, target_h)
-        self.save_export_to_db(export_path)
         if original_bytes is not None:
             with open(self.dxf_path, "wb") as f:
                 f.write(original_bytes)
@@ -2773,7 +2579,6 @@ class MiniCAD(QMainWindow):
                     self.apply_opening_to_export_doc(export_doc)
                     export_doc.saveas(export_path)
                     self.save_generated_project_config(export_path, target_w, target_h)
-                    self.save_export_to_db(export_path)
                     created.append(os.path.basename(export_path))
 
                     with open(source_path, "wb") as f:
@@ -2842,27 +2647,6 @@ class MiniCAD(QMainWindow):
             if single:
                 jobs.append(single)
         return jobs
-
-    def normalize_key(self, value):
-        return table_io.normalize_key(value)
-
-    def read_csv_rows(self, path):
-        return table_io.read_csv_rows(path)
-
-    def read_xlsx_rows(self, path):
-        return table_io.read_xlsx_rows(path)
-
-    def extract_table_parameters(self, rows):
-        return table_io.extract_table_parameters(rows, self.parse_numeric_text)
-
-    def split_block_names(self, value):
-        return table_io.split_block_names(value)
-
-    def parse_door_opening_value(self, value):
-        return table_io.parse_door_opening_value(value)
-
-    def extract_batch_jobs(self, rows):
-        return table_io.extract_batch_jobs(rows, self.parse_numeric_text)
 
     def get_export_delete_handles(self):
         delete_handles = set()
@@ -3021,10 +2805,9 @@ class MiniCAD(QMainWindow):
                     group["growth_dir_y"] = map_y.get(old_dir_y, "Центр")
                     group["shift_dir_y"] = map_y.get(old_shift_dir_y, "Вгору")
                     
-        self.update_growth_axis_after_transform(mode)
-        self.swap_axis_link_mode_for_quarter_turn(mode)
         self.doc.saveas(self.dxf_path)
 
+    
         self.commit_current_geometry_as_parametric_base(
             reason=f"TRANSFORM {mode}",
             update_source_dimensions=False,
@@ -3420,13 +3203,7 @@ class MiniCAD(QMainWindow):
                 "fixed": "fix",
             }.get(self.project_meta.get("growth_axis", "both"), "WH")
             text = f"🧩 {auto_mark}{touch_mark} {name} ({len(group['handles'])} об.) {axis_mark} Y:{role}"
-            key = self.get_group_key(group)
-            keep_mark = "keep" if self.block_keep_state.get(key, True) else "del"
-            size_mark = "size" if self.group_resizes(group) else "move"
-            link_x, link_y = self.link_pair_for_mode()
-            text = f"{auto_mark}{touch_mark} {name} [{axis_mark} {size_mark} {keep_mark} {link_x}/{link_y}] ({len(group['handles'])} об.) Y:{role}"
             item = QListWidgetItem(text)
-            item.setToolTip(text)
             item.setData(Qt.ItemDataRole.UserRole, idx)
             self.group_list_widget.addItem(item)
         self.group_list_widget.blockSignals(False)
@@ -3438,7 +3215,8 @@ class MiniCAD(QMainWindow):
             self.combo_k_w, self.combo_k_h, self.combo_growth_p_w, 
             self.combo_growth_p_h, self.combo_growth_dir_x, self.combo_growth_dir_y,
             self.combo_shift_dir_x, self.combo_shift_dir_y,
-            self.chk_group_resizes
+            self.chk_group_resizes,
+            self.combo_link_x, self.combo_link_y
         ]
         
         if not selected:
@@ -3467,8 +3245,10 @@ class MiniCAD(QMainWindow):
         self.combo_shift_dir_x.setCurrentText(group.get("shift_dir_x", "Вправо"))
         self.combo_shift_dir_y.setCurrentText(group.get("shift_dir_y", "Вгору"))
         
-        self.apply_axis_link_mode_to_groups()
-        self.sync_link_combos_from_file_mode()
+        link_x_val = group.get("link_x", "X = W")
+        self.combo_link_x.setCurrentText("X = W" if "W" in link_x_val else "X = H")
+        link_y_val = group.get("link_y", "Y = H")
+        self.combo_link_y.setCurrentText("Y = W" if "W" in link_y_val else "Y = H")
 
         for widget in widgets_to_toggle:
             widget.blockSignals(False)
@@ -3495,65 +3275,6 @@ class MiniCAD(QMainWindow):
         if "Не росте" in text:
             return "fixed"
         return "both"
-
-    def swap_growth_axis_for_quarter_turn(self, axis):
-        if axis == "width":
-            return "height"
-        if axis == "height":
-            return "width"
-        return axis
-
-    def update_growth_axis_after_transform(self, mode):
-        if mode not in ("ROT90", "ROT270"):
-            return
-        self.project_meta["growth_axis"] = self.swap_growth_axis_for_quarter_turn(
-            self.project_meta.get("growth_axis", "both")
-        )
-        for group in self.parametric_groups:
-            if "growth_axis" in group:
-                group["growth_axis"] = self.swap_growth_axis_for_quarter_turn(
-                    group.get("growth_axis", "both")
-                )
-        self.sync_file_growth_axis_combo()
-
-    def link_pair_for_mode(self, mode=None):
-        mode = mode or self.project_meta.get("axis_link_mode", "normal")
-        if mode == "rotated":
-            return "X = H", "Y = W"
-        return "X = W", "Y = H"
-
-    def axis_link_mode_from_pair(self, link_x=None, link_y=None):
-        link_x = link_x or ""
-        link_y = link_y or ""
-        if "H" in link_x or "W" in link_y:
-            return "rotated"
-        return "normal"
-
-    def apply_axis_link_mode_to_groups(self):
-        link_x, link_y = self.link_pair_for_mode()
-        for group in self.parametric_groups:
-            group["link_x"] = link_x
-            group["link_y"] = link_y
-
-    def sync_link_combos_from_file_mode(self):
-        if not hasattr(self, "combo_link_x") or not hasattr(self, "combo_link_y"):
-            return
-        link_x, link_y = self.link_pair_for_mode()
-        self.combo_link_x.blockSignals(True)
-        self.combo_link_y.blockSignals(True)
-        self.combo_link_x.setCurrentText(link_x)
-        self.combo_link_y.setCurrentText(link_y)
-        self.combo_link_x.blockSignals(False)
-        self.combo_link_y.blockSignals(False)
-        self.update_file_status_panel()
-
-    def swap_axis_link_mode_for_quarter_turn(self, mode):
-        if mode not in ("ROT90", "ROT270"):
-            return
-        current = self.project_meta.get("axis_link_mode", "normal")
-        self.project_meta["axis_link_mode"] = "rotated" if current == "normal" else "normal"
-        self.apply_axis_link_mode_to_groups()
-        self.sync_link_combos_from_file_mode()
 
     def set_param_grid_row_visible(self, row, visible):
         grid = getattr(self, "param_transform_grid", None)
@@ -3622,7 +3343,6 @@ class MiniCAD(QMainWindow):
         current = self.group_list_widget.currentItem() if hasattr(self, "group_list_widget") else None
         group = self.parametric_groups[current.data(Qt.ItemDataRole.UserRole)] if current else None
         self.apply_group_controls_visibility(group)
-        self.update_file_status_panel()
 
     def on_group_growth_axis_changed(self, text):
         self.record_action_snapshot()
@@ -3681,17 +3401,19 @@ class MiniCAD(QMainWindow):
         self.save_project_config()
 
     def on_link_x_changed(self, text):
+        selected = self.group_list_widget.selectedItems()
+        if not selected: return
         self.record_action_snapshot()
-        self.project_meta["axis_link_mode"] = self.axis_link_mode_from_pair(link_x=text)
-        self.apply_axis_link_mode_to_groups()
-        self.sync_link_combos_from_file_mode()
+        idx = selected[0].data(Qt.ItemDataRole.UserRole)
+        self.parametric_groups[idx]["link_x"] = text
         self.save_project_config()
 
     def on_link_y_changed(self, text):
+        selected = self.group_list_widget.selectedItems()
+        if not selected: return
         self.record_action_snapshot()
-        self.project_meta["axis_link_mode"] = self.axis_link_mode_from_pair(link_y=text)
-        self.apply_axis_link_mode_to_groups()
-        self.sync_link_combos_from_file_mode()
+        idx = selected[0].data(Qt.ItemDataRole.UserRole)
+        self.parametric_groups[idx]["link_y"] = text
         self.save_project_config()
 
     def on_growth_dir_x_changed(self, text):
@@ -5689,33 +5411,7 @@ class MiniCAD(QMainWindow):
         if (modifiers & Qt.ControlModifier):
             if handle in self.selected_handles: self.selected_handles.remove(handle)
             else: self.selected_handles.add(handle)
-            self.sync_list_from_handles()
-            self.update_viewer()
-            return
-
-        group_idx = self.group_index_for_handle(handle)
-        if group_idx is not None:
-            self.select_group_by_index(group_idx)
-            return
-
-        self.group_list_widget.clearSelection()
-        self.selected_handles = {handle}
-        self.sync_list_from_handles()
-        self.update_viewer()
-
-    def group_index_for_handle(self, handle):
-        handle = str(handle)
-        for idx, group in enumerate(self.parametric_groups):
-            if handle in {str(h) for h in group.get("handles", set())}:
-                return idx
-        return None
-
-    def select_group_by_index(self, idx):
-        if idx < 0 or idx >= self.group_list_widget.count():
-            return
-        self.group_list_widget.setCurrentRow(idx)
-        group = self.parametric_groups[idx]
-        self.selected_handles = set(group.get("handles", set()))
+        else: self.selected_handles = {handle}
         self.sync_list_from_handles()
         self.update_viewer()
 
