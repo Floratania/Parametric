@@ -3477,6 +3477,75 @@ class ParametricDb:
             self.last_error = str(exc)
             return None
 
+    def update_user(
+        self,
+        user_id: int,
+        username: str,
+        full_name: str = "",
+        password: str = "",
+        is_active: bool = True,
+        role_id: Optional[int] = None,
+    ) -> bool:
+        username = str(username or "").strip()
+        if not username:
+            self.last_error = "Username is required."
+            return False
+        try:
+            columns = self.table_columns("Users")
+            assignments = ["Username = ?", "FullName = ?", "IsActive = ?"]
+            params = [username, full_name or username, 1 if is_active else 0]
+            if password:
+                assignments.append("PasswordHash = ?")
+                params.append(self.hash_password(password))
+            if "RoleId" in columns and role_id:
+                assignments.append("RoleId = ?")
+                params.append(int(role_id))
+            elif "UserRoleId" in columns and role_id:
+                assignments.append("UserRoleId = ?")
+                params.append(int(role_id))
+            elif "Role" in columns and role_id:
+                assignments.append("Role = ?")
+                params.append(self.role_name_by_id(role_id))
+            elif "UserRole" in columns and role_id:
+                assignments.append("UserRole = ?")
+                params.append(self.role_name_by_id(role_id))
+            if "UpdatedAt" in columns:
+                assignments.append("UpdatedAt = SYSDATETIME()")
+
+            with self.connect() as conn:
+                cur = conn.cursor()
+                exists = self._scalar(cur, "SELECT TOP 1 Id FROM dbo.Users WHERE Username = ? AND Id <> ?", username, user_id)
+                if exists:
+                    self.last_error = f"User already exists: {username}"
+                    return False
+                cur.execute(
+                    f"UPDATE dbo.Users SET {', '.join(assignments)} WHERE Id = ?",
+                    *params,
+                    user_id,
+                )
+                conn.commit()
+
+            if role_id:
+                self.set_user_role(user_id, role_id)
+            return True
+        except Exception as exc:
+            self.last_error = str(exc)
+            return False
+
+    def deactivate_user(self, user_id: int) -> bool:
+        try:
+            with self.connect() as conn:
+                conn.cursor().execute("UPDATE dbo.Users SET IsActive = 0 WHERE Id = ?", user_id)
+                conn.commit()
+            return True
+        except Exception as exc:
+            self.last_error = str(exc)
+            return False
+
+    def delete_user(self, user_id: int) -> bool:
+        # Keep audit/history references intact; "delete" means disable login.
+        return self.deactivate_user(user_id)
+
     def list_rule_templates(self, active_only: bool = True) -> List[Dict[str, Any]]:
         try:
             where = "WHERE IsActive = 1" if active_only else ""

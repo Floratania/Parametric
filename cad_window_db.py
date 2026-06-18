@@ -13829,7 +13829,12 @@ class MiniCAD(QMainWindow):
 
     def is_current_user_admin(self):
         user = getattr(self, "current_user", None) or {}
-        return bool(user.get("is_admin")) or str(user.get("username", "")).strip().lower() == "admin"
+        role = str(user.get("role") or "").strip().lower()
+        return (
+            bool(user.get("is_admin")) or
+            str(user.get("username", "")).strip().lower() == "admin" or
+            role in ("admin", "administrator", "адмін", "администратор")
+        )
 
     def update_admin_panel_visibility(self):
         if hasattr(self, "admin_group"):
@@ -13887,6 +13892,137 @@ class MiniCAD(QMainWindow):
             QMessageBox.information(self, "Адмін", f"Користувача створено: {input_username.text()}{warning}")
         else:
             QMessageBox.warning(self, "Адмін", f"Не вдалося створити користувача:\n{self.db.last_error}")
+
+    def admin_user_choices(self, include_inactive=True):
+        users = self.db.list_users() if getattr(self, "db", None) else []
+        choices = []
+        by_label = {}
+        for user in users:
+            if not include_inactive and not user.get("is_active"):
+                continue
+            status = "активний" if user.get("is_active") else "вимкнений"
+            role = user.get("role") or "-"
+            label = f"{user.get('id')} | {user.get('username')} | {role} | {status}"
+            choices.append(label)
+            by_label[label] = user
+        return choices, by_label
+
+    def admin_pick_user(self, title="Користувач", include_inactive=True):
+        choices, by_label = self.admin_user_choices(include_inactive=include_inactive)
+        if not choices:
+            QMessageBox.information(self, "Адмін", "Користувачів не знайдено.")
+            return None
+        label, ok = QInputDialog.getItem(self, title, "Виберіть користувача:", choices, 0, False)
+        if not ok or not label:
+            return None
+        return by_label.get(label)
+
+    def role_picker_data(self):
+        roles = self.db.list_roles() if getattr(self, "db", None) else []
+        labels = []
+        by_label = {}
+        for role in roles:
+            label = f"{role.get('id')} | {role.get('name')}"
+            labels.append(label)
+            by_label[label] = role
+        return roles, labels, by_label
+
+    def admin_edit_user(self):
+        if not self.admin_require():
+            return
+        user = self.admin_pick_user("Редагувати користувача", include_inactive=True)
+        if not user:
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Редагувати користувача")
+        form = QFormLayout(dialog)
+        input_username = QLineEdit(str(user.get("username") or ""))
+        input_full_name = QLineEdit(str(user.get("full_name") or ""))
+        input_password = QLineEdit()
+        input_password.setEchoMode(QLineEdit.EchoMode.Password)
+        input_password.setPlaceholderText("лишити порожнім, щоб не міняти")
+        check_active = QCheckBox("Активний")
+        check_active.setChecked(bool(user.get("is_active")))
+
+        roles, role_labels, role_by_label = self.role_picker_data()
+        combo_role = QComboBox()
+        if role_labels:
+            combo_role.addItems(role_labels)
+            current_role = str(user.get("role") or "").strip().lower()
+            for idx, label in enumerate(role_labels):
+                role_name = str(role_by_label[label].get("name") or "").strip().lower()
+                if role_name == current_role:
+                    combo_role.setCurrentIndex(idx)
+                    break
+
+        form.addRow("Логін:", input_username)
+        form.addRow("Ім'я:", input_full_name)
+        form.addRow("Новий пароль:", input_password)
+        if role_labels:
+            form.addRow("Роль:", combo_role)
+        form.addRow("", check_active)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        selected_role = role_by_label.get(combo_role.currentText()) if role_labels else None
+        ok = self.db.update_user(
+            int(user.get("id")),
+            input_username.text(),
+            input_full_name.text(),
+            input_password.text(),
+            check_active.isChecked(),
+            (selected_role or {}).get("id"),
+        )
+        if ok:
+            if int(user.get("id")) == self.current_user_id():
+                self.current_user["username"] = input_username.text().strip()
+                self.current_user["full_name"] = input_full_name.text().strip()
+                self.current_user["role"] = str((selected_role or {}).get("name") or self.current_user.get("role") or "").lower()
+                self.current_user["is_admin"] = self.is_current_user_admin()
+                self.update_admin_panel_visibility()
+                self.update_file_status_panel()
+            QMessageBox.information(self, "Адмін", "Користувача оновлено.")
+        else:
+            QMessageBox.warning(self, "Адмін", f"Не вдалося оновити користувача:\n{self.db.last_error}")
+
+    def admin_delete_user(self):
+        if not self.admin_require():
+            return
+        user = self.admin_pick_user("Видалити користувача", include_inactive=True)
+        if not user:
+            return
+        if int(user.get("id")) == self.current_user_id():
+            QMessageBox.warning(self, "Адмін", "Не можна видалити поточного користувача під час активного входу.")
+            return
+        answer = QMessageBox.question(
+            self,
+            "Видалити користувача",
+            f"Вимкнути користувача '{user.get('username')}'? Він більше не зможе увійти.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        if self.db.delete_user(int(user.get("id"))):
+            QMessageBox.information(self, "Адмін", "Користувача вимкнено.")
+        else:
+            QMessageBox.warning(self, "Адмін", f"Не вдалося вимкнути користувача:\n{self.db.last_error}")
+
+    def logout_user(self):
+        if getattr(self, "current_user", None):
+            self.save_current_project_to_db("Logout")
+        self.current_user = None
+        self.update_admin_panel_visibility()
+        self.update_file_status_panel()
+        self.setWindowTitle("MiniCAD")
+        if not self.authenticate_user():
+            sys.exit(0)
 
     def admin_add_group_name(self):
         if not self.admin_require():
@@ -14932,11 +15068,25 @@ class MiniCAD(QMainWindow):
         theme_group.setLayout(theme_box)
         self.tab_more_layout.addWidget(theme_group)
 
+        account_group = QGroupBox("Акаунт")
+        account_box = QVBoxLayout()
+        self.btn_logout = QPushButton("Вийти з акаунта")
+        self.btn_logout.clicked.connect(self.logout_user)
+        account_box.addWidget(self.btn_logout)
+        account_group.setLayout(account_box)
+        self.tab_more_layout.addWidget(account_group)
+
         self.admin_group = QGroupBox("Адміністрування")
         admin_box = QVBoxLayout()
         self.btn_admin_add_user = QPushButton("Додати користувача")
         self.btn_admin_add_user.clicked.connect(self.admin_add_user)
         admin_box.addWidget(self.btn_admin_add_user)
+        self.btn_admin_edit_user = QPushButton("Редагувати користувача")
+        self.btn_admin_edit_user.clicked.connect(self.admin_edit_user)
+        admin_box.addWidget(self.btn_admin_edit_user)
+        self.btn_admin_delete_user = QPushButton("Видалити користувача")
+        self.btn_admin_delete_user.clicked.connect(self.admin_delete_user)
+        admin_box.addWidget(self.btn_admin_delete_user)
         self.btn_admin_add_group_name = QPushButton("Додати назву групи")
         self.btn_admin_add_group_name.clicked.connect(self.admin_add_group_name)
         admin_box.addWidget(self.btn_admin_add_group_name)
