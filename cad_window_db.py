@@ -13414,7 +13414,7 @@ from PySide6.QtWidgets import (
     QGroupBox, QGraphicsRectItem, QComboBox, QLineEdit, QGraphicsView, 
     QGraphicsScene, QAbstractItemView, QGraphicsEllipseItem, QInputDialog, QFileDialog, QMessageBox,
     QGridLayout, QGraphicsTextItem, QGraphicsSimpleTextItem, QGraphicsItem, QTabWidget, QSizePolicy,
-    QTreeWidget, QTreeWidgetItem
+    QTreeWidget, QTreeWidgetItem, QDialog, QFormLayout, QDialogButtonBox
 )
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QColor, QBrush, QPen, QPainterPath, QPainter, QGuiApplication
@@ -13812,6 +13812,8 @@ class MiniCAD(QMainWindow):
                     self.lbl_status_calc.setText(
                         f"<font color='#a5d6a7'>БД підключена. Користувач: {user.get('username')}</font>"
                     )
+                self.update_admin_panel_visibility()
+                self.refresh_rule_library_combo()
                 self.save_current_project_to_db("Opened")
                 self.register_current_folder_model(show_errors=False)
                 self.update_file_status_panel()
@@ -13824,6 +13826,123 @@ class MiniCAD(QMainWindow):
         if not self.current_user:
             return None
         return self.current_user.get("id")
+
+    def is_current_user_admin(self):
+        user = getattr(self, "current_user", None) or {}
+        return bool(user.get("is_admin")) or str(user.get("username", "")).strip().lower() == "admin"
+
+    def update_admin_panel_visibility(self):
+        if hasattr(self, "admin_group"):
+            self.admin_group.setVisible(self.is_current_user_admin())
+
+    def admin_require(self):
+        if self.is_current_user_admin():
+            return True
+        QMessageBox.warning(self, "Адмін", "Ця дія доступна тільки адміністратору.")
+        return False
+
+    def admin_add_user(self):
+        if not self.admin_require():
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Новий користувач")
+        form = QFormLayout(dialog)
+        input_username = QLineEdit()
+        input_full_name = QLineEdit()
+        input_password = QLineEdit()
+        input_password.setEchoMode(QLineEdit.EchoMode.Password)
+        check_admin = QCheckBox("Адміністратор")
+        form.addRow("Логін:", input_username)
+        form.addRow("Ім'я:", input_full_name)
+        form.addRow("Пароль:", input_password)
+        form.addRow("", check_admin)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        user_id = self.db.create_user(
+            input_username.text(),
+            input_password.text(),
+            input_full_name.text(),
+            check_admin.isChecked(),
+        )
+        if user_id:
+            QMessageBox.information(self, "Адмін", f"Користувача створено: {input_username.text()}")
+        else:
+            QMessageBox.warning(self, "Адмін", f"Не вдалося створити користувача:\n{self.db.last_error}")
+
+    def admin_add_group_name(self):
+        if not self.admin_require():
+            return
+        name, ok = QInputDialog.getText(self, "Назва групи", "Нова типова назва групи:")
+        if not ok or not name.strip():
+            return
+        template_id = self.db.add_group_name_template(name.strip(), self.current_user_id())
+        if template_id:
+            self.refresh_rule_library_combo()
+            QMessageBox.information(self, "Адмін", f"Назву додано: {name.strip()}")
+        else:
+            QMessageBox.warning(self, "Адмін", f"Не вдалося додати назву:\n{self.db.last_error}")
+
+    def rule_from_group(self, group):
+        return {
+            "k_w": float(group.get("k_w", 0.0) or 0.0),
+            "k_h": float(group.get("k_h", 0.0) or 0.0),
+            "growth_p_w": float(group.get("growth_p_w", 0.0) or 0.0),
+            "growth_p_h": float(group.get("growth_p_h", 0.0) or 0.0),
+            "growth_dir_x": group.get("growth_dir_x") or "Центр",
+            "growth_dir_y": group.get("growth_dir_y") or "Центр",
+            "shift_dir_x": group.get("shift_dir_x") or "Вправо",
+            "shift_dir_y": group.get("shift_dir_y") or "Вгору",
+            "link_x": group.get("link_x") or self.project_meta.get("link_x") or "X = W",
+            "link_y": group.get("link_y") or self.project_meta.get("link_y") or "Y = H",
+        }
+
+    def rule_from_current_controls(self):
+        return {
+            "k_w": parse_factor(self.combo_k_w.currentText()) if hasattr(self, "combo_k_w") else 0.0,
+            "k_h": parse_factor(self.combo_k_h.currentText()) if hasattr(self, "combo_k_h") else 0.0,
+            "growth_p_w": parse_factor(self.combo_growth_p_w.currentText()) if hasattr(self, "combo_growth_p_w") else 0.0,
+            "growth_p_h": parse_factor(self.combo_growth_p_h.currentText()) if hasattr(self, "combo_growth_p_h") else 0.0,
+            "growth_dir_x": self.combo_growth_dir_x.currentText() if hasattr(self, "combo_growth_dir_x") else "Центр",
+            "growth_dir_y": self.combo_growth_dir_y.currentText() if hasattr(self, "combo_growth_dir_y") else "Центр",
+            "shift_dir_x": self.combo_shift_dir_x.currentText() if hasattr(self, "combo_shift_dir_x") else "Вправо",
+            "shift_dir_y": self.combo_shift_dir_y.currentText() if hasattr(self, "combo_shift_dir_y") else "Вгору",
+            "link_x": self.project_meta.get("link_x") or "X = W",
+            "link_y": self.project_meta.get("link_y") or "Y = H",
+        }
+
+    def admin_save_rule(self, default_name, rule):
+        name, ok = QInputDialog.getText(self, "Шаблон правила", "Назва правила:", text=default_name)
+        if not ok or not name.strip():
+            return
+        desc, desc_ok = QInputDialog.getText(self, "Шаблон правила", "Опис:", text="")
+        if not desc_ok:
+            desc = ""
+        template_id = self.db.save_rule_template(name.strip(), desc, rule, self.current_user_id(), is_system=False, is_active=True)
+        if template_id:
+            self.refresh_rule_library_combo()
+            QMessageBox.information(self, "Адмін", f"Правило збережено: {name.strip()}")
+        else:
+            QMessageBox.warning(self, "Адмін", f"Не вдалося зберегти правило:\n{self.db.last_error}")
+
+    def admin_save_selected_group_rule(self):
+        if not self.admin_require():
+            return
+        selected = self.group_list_widget.selectedItems() if hasattr(self, "group_list_widget") else []
+        if not selected:
+            QMessageBox.information(self, "Адмін", "Спочатку виберіть групу.")
+            return
+        idx = selected[0].data(Qt.ItemDataRole.UserRole)
+        group = self.parametric_groups[idx]
+        self.admin_save_rule(group.get("name", "Нове правило"), self.rule_from_group(group))
+
+    def admin_add_rule_from_controls(self):
+        if not self.admin_require():
+            return
+        self.admin_save_rule("Нове правило", self.rule_from_current_controls())
 
     def save_current_project_to_db(self, status="ConfigSaved"):
         if not getattr(self, "db", None) or not self.current_user_id():
@@ -14722,7 +14841,7 @@ class MiniCAD(QMainWindow):
 
         rule_layout = QHBoxLayout()
         self.combo_rule_library = QComboBox()
-        self.combo_rule_library.addItems(list(self.typical_rule_library().keys()))
+        self.refresh_rule_library_combo()
         rule_layout.addWidget(self.combo_rule_library)
         self.btn_apply_rule = QPushButton("Застосувати правило")
         self.btn_apply_rule.clicked.connect(self.apply_selected_rule_to_group)
@@ -14797,6 +14916,24 @@ class MiniCAD(QMainWindow):
         theme_box.addWidget(self.theme_combo)
         theme_group.setLayout(theme_box)
         self.tab_more_layout.addWidget(theme_group)
+
+        self.admin_group = QGroupBox("Адміністрування")
+        admin_box = QVBoxLayout()
+        self.btn_admin_add_user = QPushButton("Додати користувача")
+        self.btn_admin_add_user.clicked.connect(self.admin_add_user)
+        admin_box.addWidget(self.btn_admin_add_user)
+        self.btn_admin_add_group_name = QPushButton("Додати назву групи")
+        self.btn_admin_add_group_name.clicked.connect(self.admin_add_group_name)
+        admin_box.addWidget(self.btn_admin_add_group_name)
+        self.btn_admin_save_rule = QPushButton("Зберегти правило з вибраної групи")
+        self.btn_admin_save_rule.clicked.connect(self.admin_save_selected_group_rule)
+        admin_box.addWidget(self.btn_admin_save_rule)
+        self.btn_admin_add_rule = QPushButton("Додати правило з поточних полів")
+        self.btn_admin_add_rule.clicked.connect(self.admin_add_rule_from_controls)
+        admin_box.addWidget(self.btn_admin_add_rule)
+        self.admin_group.setLayout(admin_box)
+        self.admin_group.setVisible(False)
+        self.tab_more_layout.addWidget(self.admin_group)
 
         self.tab_file_layout.addStretch()
         self.tab_sizes_layout.addStretch()
@@ -15061,8 +15198,81 @@ class MiniCAD(QMainWindow):
             }
         }
 
+    def db_rule_library(self):
+        rules = {}
+        if getattr(self, "db", None) and getattr(self.db, "available", False):
+            for row in self.db.list_rule_templates(active_only=True):
+                name = str(row.get("name") or "").strip()
+                if not name:
+                    continue
+                rules[name] = {
+                    "k_w": row.get("k_w", 0.0),
+                    "k_h": row.get("k_h", 0.0),
+                    "growth_p_w": row.get("growth_p_w", 0.0),
+                    "growth_p_h": row.get("growth_p_h", 0.0),
+                    "growth_dir_x": row.get("growth_dir_x", "Центр"),
+                    "growth_dir_y": row.get("growth_dir_y", "Центр"),
+                    "shift_dir_x": row.get("shift_dir_x", "Вправо"),
+                    "shift_dir_y": row.get("shift_dir_y", "Вгору"),
+                    "link_x": row.get("link_x", "X = W"),
+                    "link_y": row.get("link_y", "Y = H"),
+                }
+        return rules
+
+    def rule_library(self):
+        rules = dict(self.typical_rule_library())
+        for name, rule in self.db_rule_library().items():
+            key = name if name not in rules else f"БД: {name}"
+            rules[key] = rule
+        return rules
+
+    def refresh_rule_library_combo(self):
+        if not hasattr(self, "combo_rule_library"):
+            return
+        current = self.combo_rule_library.currentText()
+        self.combo_rule_library.blockSignals(True)
+        self.combo_rule_library.clear()
+        self.combo_rule_library.addItems(list(self.rule_library().keys()))
+        if current:
+            idx = self.combo_rule_library.findText(current)
+            if idx >= 0:
+                self.combo_rule_library.setCurrentIndex(idx)
+        self.combo_rule_library.blockSignals(False)
+
+    def group_name_suggestions(self):
+        names = []
+        if getattr(self, "db", None) and getattr(self.db, "available", False):
+            names.extend(self.db.list_group_name_suggestions())
+        names.extend(["Полотно", "Бокова стійка", "Перемичка", "Підсилювач", "Поріг"])
+        result = []
+        seen = set()
+        for name in names:
+            text = str(name or "").strip()
+            key = text.lower()
+            if text and key not in seen:
+                seen.add(key)
+                result.append(text)
+        return result
+
+    def ask_group_name(self):
+        suggestions = self.group_name_suggestions()
+        if suggestions:
+            name, ok = QInputDialog.getItem(
+                self,
+                "Нова група",
+                "Виберіть або введіть назву групи:",
+                suggestions,
+                0,
+                True,
+            )
+        else:
+            name, ok = QInputDialog.getText(self, "Нова група", "Введіть назву групи:")
+        if not ok or not str(name).strip():
+            return f"Група {len(self.parametric_groups) + 1}"
+        return str(name).strip()
+
     def apply_rule_to_group(self, group, rule_name):
-        rule = self.typical_rule_library().get(rule_name)
+        rule = self.rule_library().get(rule_name)
         if not rule:
             return
         group.update(rule)
@@ -17522,13 +17732,7 @@ class MiniCAD(QMainWindow):
         if len(self.selected_handles) < 1:
             return  
 
-        name, ok = QInputDialog.getText(
-            self,
-            "Нова група",
-            "Введіть назву групи:"
-        )
-        if not ok or not name.strip():
-            name = f"Група {len(self.parametric_groups) + 1}"
+        name = self.ask_group_name()
         self.record_action_snapshot()
 
         for group in self.parametric_groups:
@@ -17536,7 +17740,7 @@ class MiniCAD(QMainWindow):
         self.parametric_groups = [g for g in self.parametric_groups if len(g["handles"]) > 0]
 
         new_group = {
-            "name": name.strip(),
+            "name": name,
             "handles": set(self.selected_handles),
             "k_w": 0.0, 
             "k_h": 0.0,

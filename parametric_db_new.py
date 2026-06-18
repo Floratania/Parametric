@@ -1,4 +1,4 @@
-# # # import os
+﻿# # # import os
 # # # import json
 # # # import hashlib
 # # # import datetime as dt
@@ -9,21 +9,21 @@
 
 
 # # # class LoginDialog(QDialog):
-# # #     def __init__(self, parent=None, message="Вхід"):
+# # #     def __init__(self, parent=None, message="Р’С…С–Рґ"):
 # # #         super().__init__(parent)
-# # #         self.setWindowTitle("Авторизація")
+# # #         self.setWindowTitle("РђРІС‚РѕСЂРёР·Р°С†С–СЏ")
 # # #         layout = QVBoxLayout(self)
 # # #         layout.addWidget(QLabel(message))
 # # #         self.username_input = QLineEdit()
-# # #         self.username_input.setPlaceholderText("Логін")
+# # #         self.username_input.setPlaceholderText("Р›РѕРіС–РЅ")
 # # #         self.password_input = QLineEdit()
-# # #         self.password_input.setPlaceholderText("Пароль")
+# # #         self.password_input.setPlaceholderText("РџР°СЂРѕР»СЊ")
 # # #         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
 # # #         layout.addWidget(self.username_input)
 # # #         layout.addWidget(self.password_input)
 # # #         buttons = QHBoxLayout()
-# # #         btn_ok = QPushButton("Увійти")
-# # #         btn_cancel = QPushButton("Скасувати")
+# # #         btn_ok = QPushButton("РЈРІС–Р№С‚Рё")
+# # #         btn_cancel = QPushButton("РЎРєР°СЃСѓРІР°С‚Рё")
 # # #         btn_ok.clicked.connect(self.accept)
 # # #         btn_cancel.clicked.connect(self.reject)
 # # #         buttons.addWidget(btn_ok)
@@ -44,7 +44,7 @@
 # # #     ]:
 # # #         if name in drivers:
 # # #             return name
-# # #     raise RuntimeError(f"Не знайдено SQL Server ODBC driver. Є тільки: {drivers}")
+# # #     raise RuntimeError(f"РќРµ Р·РЅР°Р№РґРµРЅРѕ SQL Server ODBC driver. Р„ С‚С–Р»СЊРєРё: {drivers}")
 
 # # # class ParametricDb:
 # # #     """
@@ -128,7 +128,7 @@
 # # #     ) -> Optional[int]:
 # # #         """Upsert DXF binary + all parametric settings. Does NOT save target sizes."""
 # # #         if not os.path.exists(dxf_path):
-# # #             self.last_error = f"DXF не знайдено: {dxf_path}"
+# # #             self.last_error = f"DXF РЅРµ Р·РЅР°Р№РґРµРЅРѕ: {dxf_path}"
 # # #             return None
 
 # # #         try:
@@ -237,16 +237,16 @@
 # # #                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, SYSDATETIME())
 # # #                         """,
 # # #                         project_file_id,
-# # #                         group.get("name") or "Група",
+# # #                         group.get("name") or "Р“СЂСѓРїР°",
 # # #                         uid,
 # # #                         group.get("k_w") or 0,
 # # #                         group.get("k_h") or 0,
 # # #                         group.get("growth_p_w") or 0,
 # # #                         group.get("growth_p_h") or 0,
-# # #                         group.get("growth_dir_x") or "Центр",
-# # #                         group.get("growth_dir_y") or "Центр",
-# # #                         group.get("shift_dir_x") or "Вправо",
-# # #                         group.get("shift_dir_y") or "Вгору",
+# # #                         group.get("growth_dir_x") or "Р¦РµРЅС‚СЂ",
+# # #                         group.get("growth_dir_y") or "Р¦РµРЅС‚СЂ",
+# # #                         group.get("shift_dir_x") or "Р’РїСЂР°РІРѕ",
+# # #                         group.get("shift_dir_y") or "Р’РіРѕСЂСѓ",
 # # #                         group.get("link_x") or "X = W",
 # # #                         group.get("link_y") or "Y = H",
 # # #                         1 if group.get("resizes") else 0,
@@ -264,7 +264,7 @@
 # # #                         "INSERT INTO dbo.ProjectBlockStates (ProjectFileId, BlockKey, BlockName, IsKeep) VALUES (?, ?, ?, ?)",
 # # #                         project_file_id,
 # # #                         uid,
-# # #                         group.get("name") or "Група",
+# # #                         group.get("name") or "Р“СЂСѓРїР°",
 # # #                         keep,
 # # #                     )
 
@@ -347,10 +347,10 @@
 # # #                         "k_h": float(gr.K_H or 0),
 # # #                         "growth_p_w": float(gr.Growth_P_W or 0),
 # # #                         "growth_p_h": float(gr.Growth_P_H or 0),
-# # #                         "growth_dir_x": gr.Growth_Dir_X or "Центр",
-# # #                         "growth_dir_y": gr.Growth_Dir_Y or "Центр",
-# # #                         "shift_dir_x": gr.Shift_Dir_X or "Вправо",
-# # #                         "shift_dir_y": gr.Shift_Dir_Y or "Вгору",
+# # #                         "growth_dir_x": gr.Growth_Dir_X or "Р¦РµРЅС‚СЂ",
+# # #                         "growth_dir_y": gr.Growth_Dir_Y or "Р¦РµРЅС‚СЂ",
+# # #                         "shift_dir_x": gr.Shift_Dir_X or "Р’РїСЂР°РІРѕ",
+# # #                         "shift_dir_y": gr.Shift_Dir_Y or "Р’РіРѕСЂСѓ",
 # # #                         "link_x": gr.Link_X or "X = W",
 # # #                         "link_y": gr.Link_Y or "Y = H",
 # # #                         "resizes": bool(gr.Resizes),
@@ -424,26 +424,26 @@
 
 
 # # class LoginDialog(QDialog):
-# #     def __init__(self, parent=None, message="Вхід"):
+# #     def __init__(self, parent=None, message="Р’С…С–Рґ"):
 # #         super().__init__(parent)
-# #         self.setWindowTitle("Авторизація")
+# #         self.setWindowTitle("РђРІС‚РѕСЂРёР·Р°С†С–СЏ")
 
 # #         layout = QVBoxLayout(self)
 # #         layout.addWidget(QLabel(message))
 
 # #         self.username_input = QLineEdit()
-# #         self.username_input.setPlaceholderText("Логін")
+# #         self.username_input.setPlaceholderText("Р›РѕРіС–РЅ")
 
 # #         self.password_input = QLineEdit()
-# #         self.password_input.setPlaceholderText("Пароль")
+# #         self.password_input.setPlaceholderText("РџР°СЂРѕР»СЊ")
 # #         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
 
 # #         layout.addWidget(self.username_input)
 # #         layout.addWidget(self.password_input)
 
 # #         buttons = QHBoxLayout()
-# #         btn_ok = QPushButton("Увійти")
-# #         btn_cancel = QPushButton("Скасувати")
+# #         btn_ok = QPushButton("РЈРІС–Р№С‚Рё")
+# #         btn_cancel = QPushButton("РЎРєР°СЃСѓРІР°С‚Рё")
 
 # #         btn_ok.clicked.connect(self.accept)
 # #         btn_cancel.clicked.connect(self.reject)
@@ -469,20 +469,20 @@
 # #         if name in drivers:
 # #             return name
 
-# #     raise RuntimeError(f"Не знайдено SQL Server ODBC driver. Доступні драйвери: {drivers}")
+# #     raise RuntimeError(f"РќРµ Р·РЅР°Р№РґРµРЅРѕ SQL Server ODBC driver. Р”РѕСЃС‚СѓРїРЅС– РґСЂР°Р№РІРµСЂРё: {drivers}")
 
 
 # # class ParametricDb:
 # #     """
 # #     MSSQL storage for MiniCAD.
 
-# #     Нова структура:
-# #         DoorModels      = одна папка / одна модель дверей
-# #         ProjectFiles    = DXF-файли цієї моделі
-# #         ProjectGroups   = параметричні групи конкретного DXF
-# #         ProjectExports  = історія експортованих DXF
+# #     РќРѕРІР° СЃС‚СЂСѓРєС‚СѓСЂР°:
+# #         DoorModels      = РѕРґРЅР° РїР°РїРєР° / РѕРґРЅР° РјРѕРґРµР»СЊ РґРІРµСЂРµР№
+# #         ProjectFiles    = DXF-С„Р°Р№Р»Рё С†С–С”С— РјРѕРґРµР»С–
+# #         ProjectGroups   = РїР°СЂР°РјРµС‚СЂРёС‡РЅС– РіСЂСѓРїРё РєРѕРЅРєСЂРµС‚РЅРѕРіРѕ DXF
+# #         ProjectExports  = С–СЃС‚РѕСЂС–СЏ РµРєСЃРїРѕСЂС‚РѕРІР°РЅРёС… DXF
 
-# #     JSON не є основним сховищем. JSON використовується тільки для backup/export.
+# #     JSON РЅРµ С” РѕСЃРЅРѕРІРЅРёРј СЃС…РѕРІРёС‰РµРј. JSON РІРёРєРѕСЂРёСЃС‚РѕРІСѓС”С‚СЊСЃСЏ С‚С–Р»СЊРєРё РґР»СЏ backup/export.
 # #     """
 
 # #     def __init__(self):
@@ -533,7 +533,7 @@
 # #         door_model_id=None,
 # #     ):
 # #         """
-# #         Реєструє папку як DoorModel та всі DXF файли всередині.
+# #         Р РµС”СЃС‚СЂСѓС” РїР°РїРєСѓ СЏРє DoorModel С‚Р° РІСЃС– DXF С„Р°Р№Р»Рё РІСЃРµСЂРµРґРёРЅС–.
 # #         """
 
 # #         if door_model_id:
@@ -697,7 +697,7 @@
 
 # #             row = cur.execute(sql, username, self.hash_password(password)).fetchone()
 
-# #             # Тимчасово дозволяє старий plain text пароль під час міграції.
+# #             # РўРёРјС‡Р°СЃРѕРІРѕ РґРѕР·РІРѕР»СЏС” СЃС‚Р°СЂРёР№ plain text РїР°СЂРѕР»СЊ РїС–Рґ С‡Р°СЃ РјС–РіСЂР°С†С–С—.
 # #             if not row:
 # #                 row = cur.execute(sql, username, password).fetchone()
 
@@ -728,10 +728,10 @@
 # #         link_y: str = "Y = H",
 # #     ) -> Optional[int]:
 # #         """
-# #         Одна папка = одна DoorModel.
+# #         РћРґРЅР° РїР°РїРєР° = РѕРґРЅР° DoorModel.
 
-# #         Якщо модель для SourceFolderPath вже існує — оновлюємо базові параметри,
-# #         але не створюємо дубль.
+# #         РЇРєС‰Рѕ РјРѕРґРµР»СЊ РґР»СЏ SourceFolderPath РІР¶Рµ С–СЃРЅСѓС” вЂ” РѕРЅРѕРІР»СЋС”РјРѕ Р±Р°Р·РѕРІС– РїР°СЂР°РјРµС‚СЂРё,
+# #         Р°Р»Рµ РЅРµ СЃС‚РІРѕСЂСЋС”РјРѕ РґСѓР±Р»СЊ.
 # #         """
 # #         try:
 # #             folder_path = os.path.abspath(folder_path)
@@ -957,13 +957,13 @@
 # #         door_model_id: Optional[int] = None,
 # #     ) -> Optional[int]:
 # #         """
-# #         Upsert поточного DXF + його групи.
+# #         Upsert РїРѕС‚РѕС‡РЅРѕРіРѕ DXF + Р№РѕРіРѕ РіСЂСѓРїРё.
 
-# #         Спільні параметри моделі пишуться в DoorModels.
-# #         TargetWidth/TargetHeight не пишуться в ProjectFiles як постійний стан.
+# #         РЎРїС–Р»СЊРЅС– РїР°СЂР°РјРµС‚СЂРё РјРѕРґРµР»С– РїРёС€СѓС‚СЊСЃСЏ РІ DoorModels.
+# #         TargetWidth/TargetHeight РЅРµ РїРёС€СѓС‚СЊСЃСЏ РІ ProjectFiles СЏРє РїРѕСЃС‚С–Р№РЅРёР№ СЃС‚Р°РЅ.
 # #         """
 # #         if not os.path.exists(dxf_path):
-# #             self.last_error = f"DXF не знайдено: {dxf_path}"
+# #             self.last_error = f"DXF РЅРµ Р·РЅР°Р№РґРµРЅРѕ: {dxf_path}"
 # #             return None
 
 # #         try:
@@ -987,7 +987,7 @@
 # #                 )
 
 # #             if door_model_id is None:
-# #                 self.last_error = "Не вдалося створити/знайти DoorModel."
+# #                 self.last_error = "РќРµ РІРґР°Р»РѕСЃСЏ СЃС‚РІРѕСЂРёС‚Рё/Р·РЅР°Р№С‚Рё DoorModel."
 # #                 return None
 
 # #             self.update_door_model_from_meta(door_model_id, project_meta, user_id)
@@ -1210,16 +1210,16 @@
 # #                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, SYSDATETIME())
 # #                 """,
 # #                 project_file_id,
-# #                 group.get("name") or "Група",
+# #                 group.get("name") or "Р“СЂСѓРїР°",
 # #                 uid,
 # #                 group.get("k_w") or 0,
 # #                 group.get("k_h") or 0,
 # #                 group.get("growth_p_w") or 0,
 # #                 group.get("growth_p_h") or 0,
-# #                 group.get("growth_dir_x") or "Центр",
-# #                 group.get("growth_dir_y") or "Центр",
-# #                 group.get("shift_dir_x") or "Вправо",
-# #                 group.get("shift_dir_y") or "Вгору",
+# #                 group.get("growth_dir_x") or "Р¦РµРЅС‚СЂ",
+# #                 group.get("growth_dir_y") or "Р¦РµРЅС‚СЂ",
+# #                 group.get("shift_dir_x") or "Р’РїСЂР°РІРѕ",
+# #                 group.get("shift_dir_y") or "Р’РіРѕСЂСѓ",
 # #                 group.get("link_x") or "X = W",
 # #                 group.get("link_y") or "Y = H",
 # #                 1 if group.get("resizes") else 0,
@@ -1248,7 +1248,7 @@
 # #                 """,
 # #                 project_file_id,
 # #                 uid,
-# #                 group.get("name") or "Група",
+# #                 group.get("name") or "Р“СЂСѓРїР°",
 # #                 keep,
 # #             )
 
@@ -1260,11 +1260,11 @@
 # #         file_name: str = None,
 # #     ) -> Optional[Dict[str, Any]]:
 # #         """
-# #         Завантаження конкретного DXF.
+# #         Р—Р°РІР°РЅС‚Р°Р¶РµРЅРЅСЏ РєРѕРЅРєСЂРµС‚РЅРѕРіРѕ DXF.
 
-# #         Якщо передано DoorModelId + FileName — шукає файл в цій моделі.
-# #         Якщо передано ProjectFileId — завантажує напряму.
-# #         Старий пошук по LocalPath НЕ використовується, бо LocalPath вже немає в БД.
+# #         РЇРєС‰Рѕ РїРµСЂРµРґР°РЅРѕ DoorModelId + FileName вЂ” С€СѓРєР°С” С„Р°Р№Р» РІ С†С–Р№ РјРѕРґРµР»С–.
+# #         РЇРєС‰Рѕ РїРµСЂРµРґР°РЅРѕ ProjectFileId вЂ” Р·Р°РІР°РЅС‚Р°Р¶СѓС” РЅР°РїСЂСЏРјСѓ.
+# #         РЎС‚Р°СЂРёР№ РїРѕС€СѓРє РїРѕ LocalPath РќР• РІРёРєРѕСЂРёСЃС‚РѕРІСѓС”С‚СЊСЃСЏ, Р±Рѕ LocalPath РІР¶Рµ РЅРµРјР°С” РІ Р‘Р”.
 # #         """
 # #         try:
 # #             if file_name is None and dxf_path:
@@ -1352,7 +1352,7 @@
 # #             "source_width": source_width,
 # #             "source_height": source_height,
 
-# #             # Цільові розміри тільки для UI. Вони не є постійним станом БД.
+# #             # Р¦С–Р»СЊРѕРІС– СЂРѕР·РјС–СЂРё С‚С–Р»СЊРєРё РґР»СЏ UI. Р’РѕРЅРё РЅРµ С” РїРѕСЃС‚С–Р№РЅРёРј СЃС‚Р°РЅРѕРј Р‘Р”.
 # #             "target_width": source_width,
 # #             "target_height": source_height,
 
@@ -1427,10 +1427,10 @@
 # #                 "k_h": float(gr.K_H or 0),
 # #                 "growth_p_w": float(gr.Growth_P_W or 0),
 # #                 "growth_p_h": float(gr.Growth_P_H or 0),
-# #                 "growth_dir_x": gr.Growth_Dir_X or "Центр",
-# #                 "growth_dir_y": gr.Growth_Dir_Y or "Центр",
-# #                 "shift_dir_x": gr.Shift_Dir_X or "Вправо",
-# #                 "shift_dir_y": gr.Shift_Dir_Y or "Вгору",
+# #                 "growth_dir_x": gr.Growth_Dir_X or "Р¦РµРЅС‚СЂ",
+# #                 "growth_dir_y": gr.Growth_Dir_Y or "Р¦РµРЅС‚СЂ",
+# #                 "shift_dir_x": gr.Shift_Dir_X or "Р’РїСЂР°РІРѕ",
+# #                 "shift_dir_y": gr.Shift_Dir_Y or "Р’РіРѕСЂСѓ",
 # #                 "link_x": gr.Link_X or "X = W",
 # #                 "link_y": gr.Link_Y or "Y = H",
 # #                 "resizes": bool(gr.Resizes),
@@ -1502,7 +1502,7 @@
 # #     ) -> bool:
 # #         try:
 # #             if not os.path.exists(export_path):
-# #                 self.last_error = f"Export DXF не знайдено: {export_path}"
+# #                 self.last_error = f"Export DXF РЅРµ Р·РЅР°Р№РґРµРЅРѕ: {export_path}"
 # #                 return False
 
 # #             with open(export_path, "rb") as f:
@@ -1639,26 +1639,26 @@
 
 
 # class LoginDialog(QDialog):
-#     def __init__(self, parent=None, message="Вхід"):
+#     def __init__(self, parent=None, message="Р’С…С–Рґ"):
 #         super().__init__(parent)
-#         self.setWindowTitle("Авторизація")
+#         self.setWindowTitle("РђРІС‚РѕСЂРёР·Р°С†С–СЏ")
 
 #         layout = QVBoxLayout(self)
 #         layout.addWidget(QLabel(message))
 
 #         self.username_input = QLineEdit()
-#         self.username_input.setPlaceholderText("Логін")
+#         self.username_input.setPlaceholderText("Р›РѕРіС–РЅ")
 
 #         self.password_input = QLineEdit()
-#         self.password_input.setPlaceholderText("Пароль")
+#         self.password_input.setPlaceholderText("РџР°СЂРѕР»СЊ")
 #         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
 
 #         layout.addWidget(self.username_input)
 #         layout.addWidget(self.password_input)
 
 #         buttons = QHBoxLayout()
-#         btn_ok = QPushButton("Увійти")
-#         btn_cancel = QPushButton("Скасувати")
+#         btn_ok = QPushButton("РЈРІС–Р№С‚Рё")
+#         btn_cancel = QPushButton("РЎРєР°СЃСѓРІР°С‚Рё")
 
 #         btn_ok.clicked.connect(self.accept)
 #         btn_cancel.clicked.connect(self.reject)
@@ -1684,20 +1684,20 @@
 #         if name in drivers:
 #             return name
 
-#     raise RuntimeError(f"Не знайдено SQL Server ODBC driver. Доступні драйвери: {drivers}")
+#     raise RuntimeError(f"РќРµ Р·РЅР°Р№РґРµРЅРѕ SQL Server ODBC driver. Р”РѕСЃС‚СѓРїРЅС– РґСЂР°Р№РІРµСЂРё: {drivers}")
 
 
 # class ParametricDb:
 #     """
 #     MSSQL storage for MiniCAD.
 
-#     Нова структура:
-#         DoorModels      = одна папка / одна модель дверей
-#         ProjectFiles    = DXF-файли цієї моделі
-#         ProjectGroups   = параметричні групи конкретного DXF
-#         ProjectExports  = історія експортованих DXF
+#     РќРѕРІР° СЃС‚СЂСѓРєС‚СѓСЂР°:
+#         DoorModels      = РѕРґРЅР° РїР°РїРєР° / РѕРґРЅР° РјРѕРґРµР»СЊ РґРІРµСЂРµР№
+#         ProjectFiles    = DXF-С„Р°Р№Р»Рё С†С–С”С— РјРѕРґРµР»С–
+#         ProjectGroups   = РїР°СЂР°РјРµС‚СЂРёС‡РЅС– РіСЂСѓРїРё РєРѕРЅРєСЂРµС‚РЅРѕРіРѕ DXF
+#         ProjectExports  = С–СЃС‚РѕСЂС–СЏ РµРєСЃРїРѕСЂС‚РѕРІР°РЅРёС… DXF
 
-#     JSON не є основним сховищем. JSON використовується тільки для backup/export.
+#     JSON РЅРµ С” РѕСЃРЅРѕРІРЅРёРј СЃС…РѕРІРёС‰РµРј. JSON РІРёРєРѕСЂРёСЃС‚РѕРІСѓС”С‚СЊСЃСЏ С‚С–Р»СЊРєРё РґР»СЏ backup/export.
 #     """
 
 #     def __init__(self):
@@ -1767,13 +1767,13 @@
 #         door_model_id: Optional[int] = None,
 #     ) -> Optional[int]:
 #         """
-#         Реєструє папку як DoorModel та всі DXF-файли всередині.
+#         Р РµС”СЃС‚СЂСѓС” РїР°РїРєСѓ СЏРє DoorModel С‚Р° РІСЃС– DXF-С„Р°Р№Р»Рё РІСЃРµСЂРµРґРёРЅС–.
 
-#         Важливо:
-#         - початкові розміри однакові для всієї папки;
-#         - SourceWidth / SourceHeight / SourceDoorOpening дублюються в ProjectFiles
-#           для зручності, але основне джерело правди — DoorModels;
-#         - цільові розміри тут не зберігаються.
+#         Р’Р°Р¶Р»РёРІРѕ:
+#         - РїРѕС‡Р°С‚РєРѕРІС– СЂРѕР·РјС–СЂРё РѕРґРЅР°РєРѕРІС– РґР»СЏ РІСЃС–С”С— РїР°РїРєРё;
+#         - SourceWidth / SourceHeight / SourceDoorOpening РґСѓР±Р»СЋСЋС‚СЊСЃСЏ РІ ProjectFiles
+#           РґР»СЏ Р·СЂСѓС‡РЅРѕСЃС‚С–, Р°Р»Рµ РѕСЃРЅРѕРІРЅРµ РґР¶РµСЂРµР»Рѕ РїСЂР°РІРґРё вЂ” DoorModels;
+#         - С†С–Р»СЊРѕРІС– СЂРѕР·РјС–СЂРё С‚СѓС‚ РЅРµ Р·Р±РµСЂС–РіР°СЋС‚СЊСЃСЏ.
 #         """
 #         try:
 #             folder_path = os.path.abspath(folder_path)
@@ -1813,7 +1813,7 @@
 #                 self.update_door_model_from_meta(door_model_id, project_meta, user_id)
 
 #             if not door_model_id:
-#                 self.last_error = "Не вдалося створити або знайти DoorModel."
+#                 self.last_error = "РќРµ РІРґР°Р»РѕСЃСЏ СЃС‚РІРѕСЂРёС‚Рё Р°Р±Рѕ Р·РЅР°Р№С‚Рё DoorModel."
 #                 return None
 
 #             with self.connect() as conn:
@@ -1957,7 +1957,7 @@
 
 #             row = cur.execute(sql, username, self.hash_password(password)).fetchone()
 
-#             # Тимчасово дозволяє старий plain text пароль під час міграції.
+#             # РўРёРјС‡Р°СЃРѕРІРѕ РґРѕР·РІРѕР»СЏС” СЃС‚Р°СЂРёР№ plain text РїР°СЂРѕР»СЊ РїС–Рґ С‡Р°СЃ РјС–РіСЂР°С†С–С—.
 #             if not row:
 #                 row = cur.execute(sql, username, password).fetchone()
 
@@ -1988,10 +1988,10 @@
 #         link_y: str = "Y = H",
 #     ) -> Optional[int]:
 #         """
-#         Одна папка = одна DoorModel.
+#         РћРґРЅР° РїР°РїРєР° = РѕРґРЅР° DoorModel.
 
-#         Якщо модель для SourceFolderPath вже існує — оновлюємо базові параметри,
-#         але не створюємо дубль.
+#         РЇРєС‰Рѕ РјРѕРґРµР»СЊ РґР»СЏ SourceFolderPath РІР¶Рµ С–СЃРЅСѓС” вЂ” РѕРЅРѕРІР»СЋС”РјРѕ Р±Р°Р·РѕРІС– РїР°СЂР°РјРµС‚СЂРё,
+#         Р°Р»Рµ РЅРµ СЃС‚РІРѕСЂСЋС”РјРѕ РґСѓР±Р»СЊ.
 #         """
 #         try:
 #             folder_path = os.path.abspath(folder_path)
@@ -2227,13 +2227,13 @@
 #         door_model_id: Optional[int] = None,
 #     ) -> Optional[int]:
 #         """
-#         Upsert поточного DXF + його групи.
+#         Upsert РїРѕС‚РѕС‡РЅРѕРіРѕ DXF + Р№РѕРіРѕ РіСЂСѓРїРё.
 
-#         Спільні параметри моделі пишуться в DoorModels.
-#         TargetWidth/TargetHeight не пишуться в ProjectFiles як постійний стан.
+#         РЎРїС–Р»СЊРЅС– РїР°СЂР°РјРµС‚СЂРё РјРѕРґРµР»С– РїРёС€СѓС‚СЊСЃСЏ РІ DoorModels.
+#         TargetWidth/TargetHeight РЅРµ РїРёС€СѓС‚СЊСЃСЏ РІ ProjectFiles СЏРє РїРѕСЃС‚С–Р№РЅРёР№ СЃС‚Р°РЅ.
 #         """
 #         if not os.path.exists(dxf_path):
-#             self.last_error = f"DXF не знайдено: {dxf_path}"
+#             self.last_error = f"DXF РЅРµ Р·РЅР°Р№РґРµРЅРѕ: {dxf_path}"
 #             return None
 
 #         try:
@@ -2266,7 +2266,7 @@
 #                 )
 
 #             if door_model_id is None:
-#                 self.last_error = "Не вдалося створити/знайти DoorModel."
+#                 self.last_error = "РќРµ РІРґР°Р»РѕСЃСЏ СЃС‚РІРѕСЂРёС‚Рё/Р·РЅР°Р№С‚Рё DoorModel."
 #                 return None
 
 #             self.update_door_model_from_meta(door_model_id, project_meta, user_id)
@@ -2489,16 +2489,16 @@
 #                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, SYSDATETIME())
 #                 """,
 #                 project_file_id,
-#                 group.get("name") or "Група",
+#                 group.get("name") or "Р“СЂСѓРїР°",
 #                 uid,
 #                 group.get("k_w") or 0,
 #                 group.get("k_h") or 0,
 #                 group.get("growth_p_w") or 0,
 #                 group.get("growth_p_h") or 0,
-#                 group.get("growth_dir_x") or "Центр",
-#                 group.get("growth_dir_y") or "Центр",
-#                 group.get("shift_dir_x") or "Вправо",
-#                 group.get("shift_dir_y") or "Вгору",
+#                 group.get("growth_dir_x") or "Р¦РµРЅС‚СЂ",
+#                 group.get("growth_dir_y") or "Р¦РµРЅС‚СЂ",
+#                 group.get("shift_dir_x") or "Р’РїСЂР°РІРѕ",
+#                 group.get("shift_dir_y") or "Р’РіРѕСЂСѓ",
 #                 group.get("link_x") or "X = W",
 #                 group.get("link_y") or "Y = H",
 #                 1 if group.get("resizes") else 0,
@@ -2527,7 +2527,7 @@
 #                 """,
 #                 project_file_id,
 #                 uid,
-#                 group.get("name") or "Група",
+#                 group.get("name") or "Р“СЂСѓРїР°",
 #                 keep,
 #             )
 
@@ -2539,11 +2539,11 @@
 #         file_name: str = None,
 #     ) -> Optional[Dict[str, Any]]:
 #         """
-#         Завантаження конкретного DXF.
+#         Р—Р°РІР°РЅС‚Р°Р¶РµРЅРЅСЏ РєРѕРЅРєСЂРµС‚РЅРѕРіРѕ DXF.
 
-#         Якщо передано DoorModelId + FileName — шукає файл в цій моделі.
-#         Якщо передано ProjectFileId — завантажує напряму.
-#         Старий пошук по LocalPath НЕ використовується, бо LocalPath вже немає в БД.
+#         РЇРєС‰Рѕ РїРµСЂРµРґР°РЅРѕ DoorModelId + FileName вЂ” С€СѓРєР°С” С„Р°Р№Р» РІ С†С–Р№ РјРѕРґРµР»С–.
+#         РЇРєС‰Рѕ РїРµСЂРµРґР°РЅРѕ ProjectFileId вЂ” Р·Р°РІР°РЅС‚Р°Р¶СѓС” РЅР°РїСЂСЏРјСѓ.
+#         РЎС‚Р°СЂРёР№ РїРѕС€СѓРє РїРѕ LocalPath РќР• РІРёРєРѕСЂРёСЃС‚РѕРІСѓС”С‚СЊСЃСЏ, Р±Рѕ LocalPath РІР¶Рµ РЅРµРјР°С” РІ Р‘Р”.
 #         """
 #         try:
 #             if file_name is None and dxf_path:
@@ -2638,7 +2638,7 @@
 #             "source_width": source_width,
 #             "source_height": source_height,
 
-#             # Цільові розміри тільки для UI. Вони не є постійним станом БД.
+#             # Р¦С–Р»СЊРѕРІС– СЂРѕР·РјС–СЂРё С‚С–Р»СЊРєРё РґР»СЏ UI. Р’РѕРЅРё РЅРµ С” РїРѕСЃС‚С–Р№РЅРёРј СЃС‚Р°РЅРѕРј Р‘Р”.
 #             "target_width": source_width,
 #             "target_height": source_height,
 
@@ -2713,10 +2713,10 @@
 #                 "k_h": float(gr.K_H or 0),
 #                 "growth_p_w": float(gr.Growth_P_W or 0),
 #                 "growth_p_h": float(gr.Growth_P_H or 0),
-#                 "growth_dir_x": gr.Growth_Dir_X or "Центр",
-#                 "growth_dir_y": gr.Growth_Dir_Y or "Центр",
-#                 "shift_dir_x": gr.Shift_Dir_X or "Вправо",
-#                 "shift_dir_y": gr.Shift_Dir_Y or "Вгору",
+#                 "growth_dir_x": gr.Growth_Dir_X or "Р¦РµРЅС‚СЂ",
+#                 "growth_dir_y": gr.Growth_Dir_Y or "Р¦РµРЅС‚СЂ",
+#                 "shift_dir_x": gr.Shift_Dir_X or "Р’РїСЂР°РІРѕ",
+#                 "shift_dir_y": gr.Shift_Dir_Y or "Р’РіРѕСЂСѓ",
 #                 "link_x": gr.Link_X or "X = W",
 #                 "link_y": gr.Link_Y or "Y = H",
 #                 "resizes": bool(gr.Resizes),
@@ -2788,7 +2788,7 @@
 #     ) -> bool:
 #         try:
 #             if not os.path.exists(export_path):
-#                 self.last_error = f"Export DXF не знайдено: {export_path}"
+#                 self.last_error = f"Export DXF РЅРµ Р·РЅР°Р№РґРµРЅРѕ: {export_path}"
 #                 return False
 
 #             with open(export_path, "rb") as f:
@@ -2928,26 +2928,26 @@ from PySide6.QtWidgets import (
 
 
 class LoginDialog(QDialog):
-    def __init__(self, parent=None, message="Вхід"):
+    def __init__(self, parent=None, message="Р’С…С–Рґ"):
         super().__init__(parent)
-        self.setWindowTitle("Авторизація")
+        self.setWindowTitle("РђРІС‚РѕСЂРёР·Р°С†С–СЏ")
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(message))
 
         self.username_input = QLineEdit()
-        self.username_input.setPlaceholderText("Логін")
+        self.username_input.setPlaceholderText("Р›РѕРіС–РЅ")
 
         self.password_input = QLineEdit()
-        self.password_input.setPlaceholderText("Пароль")
+        self.password_input.setPlaceholderText("РџР°СЂРѕР»СЊ")
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
 
         layout.addWidget(self.username_input)
         layout.addWidget(self.password_input)
 
         buttons = QHBoxLayout()
-        btn_ok = QPushButton("Увійти")
-        btn_cancel = QPushButton("Скасувати")
+        btn_ok = QPushButton("РЈРІС–Р№С‚Рё")
+        btn_cancel = QPushButton("РЎРєР°СЃСѓРІР°С‚Рё")
 
         btn_ok.clicked.connect(self.accept)
         btn_cancel.clicked.connect(self.reject)
@@ -2975,20 +2975,20 @@ def get_sql_driver() -> str:
         if name in drivers:
             return name
 
-    raise RuntimeError(f"Не знайдено SQL Server ODBC driver. Доступні драйвери: {drivers}")
+    raise RuntimeError(f"РќРµ Р·РЅР°Р№РґРµРЅРѕ SQL Server ODBC driver. Р”РѕСЃС‚СѓРїРЅС– РґСЂР°Р№РІРµСЂРё: {drivers}")
 
 
 class ParametricDb:
     """
     MSSQL storage for MiniCAD.
 
-    Нова структура:
-        DoorModels      = одна папка / одна модель дверей
-        ProjectFiles    = DXF-файли цієї моделі
-        ProjectGroups   = параметричні групи конкретного DXF
-        ProjectExports  = історія експортованих DXF
+    РќРѕРІР° СЃС‚СЂСѓРєС‚СѓСЂР°:
+        DoorModels      = РѕРґРЅР° РїР°РїРєР° / РѕРґРЅР° РјРѕРґРµР»СЊ РґРІРµСЂРµР№
+        ProjectFiles    = DXF-С„Р°Р№Р»Рё С†С–С”С— РјРѕРґРµР»С–
+        ProjectGroups   = РїР°СЂР°РјРµС‚СЂРёС‡РЅС– РіСЂСѓРїРё РєРѕРЅРєСЂРµС‚РЅРѕРіРѕ DXF
+        ProjectExports  = С–СЃС‚РѕСЂС–СЏ РµРєСЃРїРѕСЂС‚РѕРІР°РЅРёС… DXF
 
-    JSON не є основним сховищем. JSON використовується тільки для backup/export.
+    JSON РЅРµ С” РѕСЃРЅРѕРІРЅРёРј СЃС…РѕРІРёС‰РµРј. JSON РІРёРєРѕСЂРёСЃС‚РѕРІСѓС”С‚СЊСЃСЏ С‚С–Р»СЊРєРё РґР»СЏ backup/export.
     """
 
     def __init__(self):
@@ -3018,7 +3018,7 @@ class ParametricDb:
 
     def connect(self):
         if pyodbc is None:
-            raise RuntimeError("pyodbc не встановлено")
+            raise RuntimeError("pyodbc РЅРµ РІСЃС‚Р°РЅРѕРІР»РµРЅРѕ")
         return pyodbc.connect(self.connection_string(), autocommit=False)
 
     def _check_connection(self) -> bool:
@@ -3062,15 +3062,15 @@ class ParametricDb:
         file_name_override: Optional[str] = None,
     ) -> Optional[int]:
         """
-        Реєструє папку як DoorModel та всі DXF-файли всередині.
+        Р РµС”СЃС‚СЂСѓС” РїР°РїРєСѓ СЏРє DoorModel С‚Р° РІСЃС– DXF-С„Р°Р№Р»Рё РІСЃРµСЂРµРґРёРЅС–.
 
-        Важливо:
-        - початкові розміри однакові для всієї папки;
-        - SourceWidth / SourceHeight / SourceDoorOpening дублюються в ProjectFiles
-          для зручності, але основне джерело правди — DoorModels;
-        - AxisLinkMode / LinkX / LinkY / GrowthAxis є параметрами конкретного DXF-файлу,
-          тому при реєстрації папки НЕ перезаписуємо їх у вже існуючих ProjectFiles;
-        - цільові розміри тут не зберігаються.
+        Р’Р°Р¶Р»РёРІРѕ:
+        - РїРѕС‡Р°С‚РєРѕРІС– СЂРѕР·РјС–СЂРё РѕРґРЅР°РєРѕРІС– РґР»СЏ РІСЃС–С”С— РїР°РїРєРё;
+        - SourceWidth / SourceHeight / SourceDoorOpening РґСѓР±Р»СЋСЋС‚СЊСЃСЏ РІ ProjectFiles
+          РґР»СЏ Р·СЂСѓС‡РЅРѕСЃС‚С–, Р°Р»Рµ РѕСЃРЅРѕРІРЅРµ РґР¶РµСЂРµР»Рѕ РїСЂР°РІРґРё вЂ” DoorModels;
+        - AxisLinkMode / LinkX / LinkY / GrowthAxis С” РїР°СЂР°РјРµС‚СЂР°РјРё РєРѕРЅРєСЂРµС‚РЅРѕРіРѕ DXF-С„Р°Р№Р»Сѓ,
+          С‚РѕРјСѓ РїСЂРё СЂРµС”СЃС‚СЂР°С†С–С— РїР°РїРєРё РќР• РїРµСЂРµР·Р°РїРёСЃСѓС”РјРѕ С—С… Сѓ РІР¶Рµ С–СЃРЅСѓСЋС‡РёС… ProjectFiles;
+        - С†С–Р»СЊРѕРІС– СЂРѕР·РјС–СЂРё С‚СѓС‚ РЅРµ Р·Р±РµСЂС–РіР°СЋС‚СЊСЃСЏ.
         """
         try:
             folder_path = os.path.abspath(folder_path)
@@ -3084,9 +3084,9 @@ class ParametricDb:
             )
             current_opening = project_meta.get("door_opening") or source_opening
 
-            # Осі НЕ належать DoorModels. Це параметри конкретного DXF-файлу.
-            # Тут беремо значення тільки як дефолт для нових файлів,
-            # а існуючим файлам їх не перезаписуємо.
+            # РћСЃС– РќР• РЅР°Р»РµР¶Р°С‚СЊ DoorModels. Р¦Рµ РїР°СЂР°РјРµС‚СЂРё РєРѕРЅРєСЂРµС‚РЅРѕРіРѕ DXF-С„Р°Р№Р»Сѓ.
+            # РўСѓС‚ Р±РµСЂРµРјРѕ Р·РЅР°С‡РµРЅРЅСЏ С‚С–Р»СЊРєРё СЏРє РґРµС„РѕР»С‚ РґР»СЏ РЅРѕРІРёС… С„Р°Р№Р»С–РІ,
+            # Р° С–СЃРЅСѓСЋС‡РёРј С„Р°Р№Р»Р°Рј С—С… РЅРµ РїРµСЂРµР·Р°РїРёСЃСѓС”РјРѕ.
             file_axis_link_mode = self.normalize_axis_link_mode(
                 project_meta.get("axis_link_mode"),
                 project_meta.get("link_x"),
@@ -3107,7 +3107,7 @@ class ParametricDb:
                 self.update_door_model_from_meta(door_model_id, project_meta, user_id)
 
             if not door_model_id:
-                self.last_error = "Не вдалося створити або знайти DoorModel."
+                self.last_error = "РќРµ РІРґР°Р»РѕСЃСЏ СЃС‚РІРѕСЂРёС‚Рё Р°Р±Рѕ Р·РЅР°Р№С‚Рё DoorModel."
                 return None
 
             with self.connect() as conn:
@@ -3223,13 +3223,36 @@ class ParametricDb:
         row = cur.execute(sql, *params).fetchone()
         return row[0] if row else None
 
+    def table_columns(self, table_name: str) -> List[str]:
+        try:
+            with self.connect() as conn:
+                rows = conn.cursor().execute(
+                    """
+                    SELECT COLUMN_NAME
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = ?
+                    """,
+                    table_name,
+                ).fetchall()
+                return [str(row.COLUMN_NAME) for row in rows]
+        except Exception as exc:
+            self.last_error = str(exc)
+            return []
+
+    def fetchone_dict(self, cur) -> Optional[Dict[str, Any]]:
+        row = cur.fetchone()
+        if not row:
+            return None
+        columns = [desc[0] for desc in cur.description]
+        return {columns[i]: row[i] for i in range(len(columns))}
+
     # ============================================================
     # AUTH
     # ============================================================
 
     def authenticate(self, username: str, password: str) -> Optional[Dict[str, Any]]:
         sql = """
-        SELECT Id, Username, FullName, IsActive
+        SELECT *
         FROM dbo.Users
         WHERE Username = ? AND PasswordHash = ? AND IsActive = 1
         """
@@ -3237,20 +3260,225 @@ class ParametricDb:
         with self.connect() as conn:
             cur = conn.cursor()
 
-            row = cur.execute(sql, username, self.hash_password(password)).fetchone()
+            cur.execute(sql, username, self.hash_password(password))
+            row = self.fetchone_dict(cur)
 
-            # Тимчасово дозволяє старий plain text пароль під час міграції.
+            # Temporary migration fallback for old plain-text passwords.
             if not row:
-                row = cur.execute(sql, username, password).fetchone()
+                cur.execute(sql, username, password)
+                row = self.fetchone_dict(cur)
 
             if not row:
                 return None
 
+            role = str(row.get("Role") or row.get("UserRole") or "").strip().lower()
+            is_admin = bool(row.get("IsAdmin")) or role in ("admin", "administrator", "адмін", "администратор")
+            if str(row.get("Username") or "").strip().lower() == "admin":
+                is_admin = True
+
             return {
-                "id": int(row.Id),
-                "username": row.Username,
-                "full_name": row.FullName,
+                "id": int(row.get("Id")),
+                "username": row.get("Username"),
+                "full_name": row.get("FullName"),
+                "is_admin": is_admin,
+                "role": role or ("admin" if is_admin else "user"),
             }
+
+    def list_users(self) -> List[Dict[str, Any]]:
+        try:
+            columns = self.table_columns("Users")
+            optional = [name for name in ("IsAdmin", "Role", "UserRole") if name in columns]
+            select_cols = ["Id", "Username", "FullName", "IsActive"] + optional
+            with self.connect() as conn:
+                cur = conn.cursor()
+                cur.execute(f"SELECT {', '.join(select_cols)} FROM dbo.Users ORDER BY Username")
+                rows = cur.fetchall()
+                names = [desc[0] for desc in cur.description]
+                result = []
+                for row in rows:
+                    data = {names[i]: row[i] for i in range(len(names))}
+                    role = str(data.get("Role") or data.get("UserRole") or "").strip().lower()
+                    is_admin = bool(data.get("IsAdmin")) or role in ("admin", "administrator", "адмін", "администратор")
+                    if str(data.get("Username") or "").strip().lower() == "admin":
+                        is_admin = True
+                    result.append({
+                        "id": int(data.get("Id")),
+                        "username": data.get("Username"),
+                        "full_name": data.get("FullName"),
+                        "is_active": bool(data.get("IsActive")),
+                        "is_admin": is_admin,
+                        "role": role or ("admin" if is_admin else "user"),
+                    })
+                return result
+        except Exception as exc:
+            self.last_error = str(exc)
+            return []
+
+    def create_user(self, username: str, password: str, full_name: str = "", is_admin: bool = False) -> Optional[int]:
+        username = str(username or "").strip()
+        if not username or not password:
+            self.last_error = "Username and password are required."
+            return None
+        try:
+            columns = self.table_columns("Users")
+            insert_cols = ["Username", "PasswordHash", "FullName", "IsActive", "CreatedAt"]
+            values_sql = ["?", "?", "?", "1", "SYSDATETIME()"]
+            params = [username, self.hash_password(password), full_name or username]
+            if "IsAdmin" in columns:
+                insert_cols.insert(-1, "IsAdmin")
+                values_sql.insert(-1, "?")
+                params.append(1 if is_admin else 0)
+            elif "Role" in columns:
+                insert_cols.insert(-1, "Role")
+                values_sql.insert(-1, "?")
+                params.append("admin" if is_admin else "user")
+            elif "UserRole" in columns:
+                insert_cols.insert(-1, "UserRole")
+                values_sql.insert(-1, "?")
+                params.append("admin" if is_admin else "user")
+
+            with self.connect() as conn:
+                cur = conn.cursor()
+                if self._scalar(cur, "SELECT TOP 1 Id FROM dbo.Users WHERE Username = ?", username):
+                    self.last_error = f"User already exists: {username}"
+                    return None
+                cur.execute(
+                    f"""
+                    INSERT INTO dbo.Users ({', '.join(insert_cols)})
+                    OUTPUT INSERTED.Id
+                    VALUES ({', '.join(values_sql)})
+                    """,
+                    *params,
+                )
+                user_id = int(cur.fetchone()[0])
+                conn.commit()
+                return user_id
+        except Exception as exc:
+            self.last_error = str(exc)
+            return None
+
+    def list_rule_templates(self, active_only: bool = True) -> List[Dict[str, Any]]:
+        try:
+            where = "WHERE IsActive = 1" if active_only else ""
+            with self.connect() as conn:
+                rows = conn.cursor().execute(
+                    f"""
+                    SELECT
+                        Id, Name, Description, K_W, K_H, Growth_P_W, Growth_P_H,
+                        Growth_Dir_X, Growth_Dir_Y, Shift_Dir_X, Shift_Dir_Y,
+                        Link_X, Link_Y, IsSystem, IsActive, CreatedByUserId, CreatedAt
+                    FROM dbo.RuleTemplates
+                    {where}
+                    ORDER BY IsSystem DESC, Name
+                    """
+                ).fetchall()
+                return [
+                    {
+                        "id": int(r.Id),
+                        "name": r.Name,
+                        "description": r.Description,
+                        "k_w": self._to_float(r.K_W) or 0.0,
+                        "k_h": self._to_float(r.K_H) or 0.0,
+                        "growth_p_w": self._to_float(r.Growth_P_W) or 0.0,
+                        "growth_p_h": self._to_float(r.Growth_P_H) or 0.0,
+                        "growth_dir_x": r.Growth_Dir_X or "Центр",
+                        "growth_dir_y": r.Growth_Dir_Y or "Центр",
+                        "shift_dir_x": r.Shift_Dir_X or "Вправо",
+                        "shift_dir_y": r.Shift_Dir_Y or "Вгору",
+                        "link_x": r.Link_X or "X = W",
+                        "link_y": r.Link_Y or "Y = H",
+                        "is_system": bool(r.IsSystem),
+                        "is_active": bool(r.IsActive),
+                    }
+                    for r in rows
+                ]
+        except Exception as exc:
+            self.last_error = str(exc)
+            return []
+
+    def save_rule_template(self, name: str, description: str, rule: Dict[str, Any], user_id: int, is_system: bool = False, is_active: bool = True) -> Optional[int]:
+        name = str(name or "").strip()
+        if not name:
+            self.last_error = "Rule template name is required."
+            return None
+        try:
+            with self.connect() as conn:
+                cur = conn.cursor()
+                existing = self._scalar(cur, "SELECT TOP 1 Id FROM dbo.RuleTemplates WHERE Name = ?", name)
+                params = [
+                    description or "",
+                    float(rule.get("k_w", 0.0) or 0.0),
+                    float(rule.get("k_h", 0.0) or 0.0),
+                    float(rule.get("growth_p_w", 0.0) or 0.0),
+                    float(rule.get("growth_p_h", 0.0) or 0.0),
+                    rule.get("growth_dir_x") or "Центр",
+                    rule.get("growth_dir_y") or "Центр",
+                    rule.get("shift_dir_x") or "Вправо",
+                    rule.get("shift_dir_y") or "Вгору",
+                    rule.get("link_x") or "X = W",
+                    rule.get("link_y") or "Y = H",
+                    1 if is_system else 0,
+                    1 if is_active else 0,
+                    user_id,
+                ]
+                if existing:
+                    cur.execute(
+                        """
+                        UPDATE dbo.RuleTemplates
+                        SET Description = ?, K_W = ?, K_H = ?, Growth_P_W = ?, Growth_P_H = ?,
+                            Growth_Dir_X = ?, Growth_Dir_Y = ?, Shift_Dir_X = ?, Shift_Dir_Y = ?,
+                            Link_X = ?, Link_Y = ?, IsSystem = ?, IsActive = ?, CreatedByUserId = ?
+                        WHERE Id = ?
+                        """,
+                        *params,
+                        existing,
+                    )
+                    template_id = int(existing)
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO dbo.RuleTemplates
+                        (
+                            Name, Description, K_W, K_H, Growth_P_W, Growth_P_H,
+                            Growth_Dir_X, Growth_Dir_Y, Shift_Dir_X, Shift_Dir_Y,
+                            Link_X, Link_Y, IsSystem, IsActive, CreatedByUserId, CreatedAt
+                        )
+                        OUTPUT INSERTED.Id
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, SYSDATETIME())
+                        """,
+                        name,
+                        *params,
+                    )
+                    template_id = int(cur.fetchone()[0])
+                conn.commit()
+                return template_id
+        except Exception as exc:
+            self.last_error = str(exc)
+            return None
+
+    def list_group_name_suggestions(self) -> List[str]:
+        try:
+            names = set()
+            with self.connect() as conn:
+                cur = conn.cursor()
+                for row in cur.execute("SELECT DISTINCT Name FROM dbo.ProjectGroups WHERE Name IS NOT NULL AND LTRIM(RTRIM(Name)) <> ''"):
+                    names.add(str(row.Name).strip())
+                for row in cur.execute("SELECT Name FROM dbo.RuleTemplates WHERE IsActive = 1 AND Name IS NOT NULL AND LTRIM(RTRIM(Name)) <> ''"):
+                    names.add(str(row.Name).strip())
+            return sorted(names, key=str.lower)
+        except Exception as exc:
+            self.last_error = str(exc)
+            return []
+
+    def add_group_name_template(self, name: str, user_id: int) -> Optional[int]:
+        rule = {
+            "k_w": 0.0, "k_h": 0.0,
+            "growth_p_w": 0.0, "growth_p_h": 0.0,
+            "growth_dir_x": "Центр", "growth_dir_y": "Центр",
+            "shift_dir_x": "Вправо", "shift_dir_y": "Вгору",
+            "link_x": "X = W", "link_y": "Y = H",
+        }
+        return self.save_rule_template(name, "Назва групи / порожній шаблон", rule, user_id, is_system=False, is_active=True)
 
     # ============================================================
     # DOOR MODEL
@@ -3270,10 +3498,10 @@ class ParametricDb:
         link_y: str = "Y = H",
     ) -> Optional[int]:
         """
-        Одна папка = одна DoorModel.
+        РћРґРЅР° РїР°РїРєР° = РѕРґРЅР° DoorModel.
 
-        Якщо модель для SourceFolderPath вже існує — оновлюємо базові параметри,
-        але не створюємо дубль.
+        РЇРєС‰Рѕ РјРѕРґРµР»СЊ РґР»СЏ SourceFolderPath РІР¶Рµ С–СЃРЅСѓС” вЂ” РѕРЅРѕРІР»СЋС”РјРѕ Р±Р°Р·РѕРІС– РїР°СЂР°РјРµС‚СЂРё,
+        Р°Р»Рµ РЅРµ СЃС‚РІРѕСЂСЋС”РјРѕ РґСѓР±Р»СЊ.
         """
         try:
             folder_path = os.path.abspath(folder_path)
@@ -3364,11 +3592,11 @@ class ParametricDb:
         user_id: int,
     ) -> bool:
         """
-        Оновлює тільки спільні дані моделі дверей.
+        РћРЅРѕРІР»СЋС” С‚С–Р»СЊРєРё СЃРїС–Р»СЊРЅС– РґР°РЅС– РјРѕРґРµР»С– РґРІРµСЂРµР№.
 
-        ВАЖЛИВО: осі файлу НЕ оновлюються тут.
-        AxisLinkMode / LinkX / LinkY / GrowthAxis належать ProjectFiles,
-        бо для різних DXF у тій самій папці вони можуть бути різними.
+        Р’РђР–Р›РР’Рћ: РѕСЃС– С„Р°Р№Р»Сѓ РќР• РѕРЅРѕРІР»СЋСЋС‚СЊСЃСЏ С‚СѓС‚.
+        AxisLinkMode / LinkX / LinkY / GrowthAxis РЅР°Р»РµР¶Р°С‚СЊ ProjectFiles,
+        Р±Рѕ РґР»СЏ СЂС–Р·РЅРёС… DXF Сѓ С‚С–Р№ СЃР°РјС–Р№ РїР°РїС†С– РІРѕРЅРё РјРѕР¶СѓС‚СЊ Р±СѓС‚Рё СЂС–Р·РЅРёРјРё.
         """
         try:
             with self.connect() as conn:
@@ -3430,7 +3658,7 @@ class ParametricDb:
                     "door_opening": model.SourceDoorOpening or "left",
                     "source_door_opening": model.SourceDoorOpening or "left",
                     "target_door_opening": model.SourceDoorOpening or "left",
-                    # Осі не беремо з DoorModels: вони зберігаються окремо в ProjectFiles.
+                    # РћСЃС– РЅРµ Р±РµСЂРµРјРѕ Р· DoorModels: РІРѕРЅРё Р·Р±РµСЂС–РіР°СЋС‚СЊСЃСЏ РѕРєСЂРµРјРѕ РІ ProjectFiles.
                     "growth_axis": "both",
                     "axis_link_mode": "normal",
                     "link_x": "X = W",
@@ -3548,13 +3776,13 @@ class ParametricDb:
         file_name_override: Optional[str] = None,
     ) -> Optional[int]:
         """
-        Upsert поточного DXF + його групи.
+        Upsert РїРѕС‚РѕС‡РЅРѕРіРѕ DXF + Р№РѕРіРѕ РіСЂСѓРїРё.
 
-        Спільні параметри моделі пишуться в DoorModels.
-        TargetWidth/TargetHeight не пишуться в ProjectFiles як постійний стан.
+        РЎРїС–Р»СЊРЅС– РїР°СЂР°РјРµС‚СЂРё РјРѕРґРµР»С– РїРёС€СѓС‚СЊСЃСЏ РІ DoorModels.
+        TargetWidth/TargetHeight РЅРµ РїРёС€СѓС‚СЊСЃСЏ РІ ProjectFiles СЏРє РїРѕСЃС‚С–Р№РЅРёР№ СЃС‚Р°РЅ.
         """
         if dxf_bytes is None and not os.path.exists(dxf_path):
-            self.last_error = f"DXF не знайдено: {dxf_path}"
+            self.last_error = f"DXF РЅРµ Р·РЅР°Р№РґРµРЅРѕ: {dxf_path}"
             return None
 
         try:
@@ -3584,7 +3812,7 @@ class ParametricDb:
                 )
 
             if door_model_id is None:
-                self.last_error = "Не вдалося створити/знайти DoorModel."
+                self.last_error = "РќРµ РІРґР°Р»РѕСЃСЏ СЃС‚РІРѕСЂРёС‚Рё/Р·РЅР°Р№С‚Рё DoorModel."
                 return None
 
             self.update_door_model_from_meta(door_model_id, project_meta, user_id)
@@ -3810,16 +4038,16 @@ class ParametricDb:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, SYSDATETIME())
                 """,
                 project_file_id,
-                group.get("name") or "Група",
+                group.get("name") or "Р“СЂСѓРїР°",
                 uid,
                 group.get("k_w") or 0,
                 group.get("k_h") or 0,
                 group.get("growth_p_w") or 0,
                 group.get("growth_p_h") or 0,
-                group.get("growth_dir_x") or "Центр",
-                group.get("growth_dir_y") or "Центр",
-                group.get("shift_dir_x") or "Вправо",
-                group.get("shift_dir_y") or "Вгору",
+                group.get("growth_dir_x") or "Р¦РµРЅС‚СЂ",
+                group.get("growth_dir_y") or "Р¦РµРЅС‚СЂ",
+                group.get("shift_dir_x") or "Р’РїСЂР°РІРѕ",
+                group.get("shift_dir_y") or "Р’РіРѕСЂСѓ",
                 group.get("link_x") or "X = W",
                 group.get("link_y") or "Y = H",
                 1 if group.get("resizes") else 0,
@@ -3848,7 +4076,7 @@ class ParametricDb:
                 """,
                 project_file_id,
                 uid,
-                group.get("name") or "Група",
+                group.get("name") or "Р“СЂСѓРїР°",
                 keep,
             )
 
@@ -3860,11 +4088,11 @@ class ParametricDb:
         file_name: str = None,
     ) -> Optional[Dict[str, Any]]:
         """
-        Завантаження конкретного DXF.
+        Р—Р°РІР°РЅС‚Р°Р¶РµРЅРЅСЏ РєРѕРЅРєСЂРµС‚РЅРѕРіРѕ DXF.
 
-        Якщо передано DoorModelId + FileName — шукає файл в цій моделі.
-        Якщо передано ProjectFileId — завантажує напряму.
-        Старий пошук по LocalPath НЕ використовується, бо LocalPath вже немає в БД.
+        РЇРєС‰Рѕ РїРµСЂРµРґР°РЅРѕ DoorModelId + FileName вЂ” С€СѓРєР°С” С„Р°Р№Р» РІ С†С–Р№ РјРѕРґРµР»С–.
+        РЇРєС‰Рѕ РїРµСЂРµРґР°РЅРѕ ProjectFileId вЂ” Р·Р°РІР°РЅС‚Р°Р¶СѓС” РЅР°РїСЂСЏРјСѓ.
+        РЎС‚Р°СЂРёР№ РїРѕС€СѓРє РїРѕ LocalPath РќР• РІРёРєРѕСЂРёСЃС‚РѕРІСѓС”С‚СЊСЃСЏ, Р±Рѕ LocalPath РІР¶Рµ РЅРµРјР°С” РІ Р‘Р”.
         """
         try:
             if file_name is None and dxf_path:
@@ -3948,7 +4176,7 @@ class ParametricDb:
             else file_row.SourceDoorOpening
         ) or "left"
 
-        # Осі файлу є параметрами конкретного DXF, тому беремо їх тільки з ProjectFiles.
+        # РћСЃС– С„Р°Р№Р»Сѓ С” РїР°СЂР°РјРµС‚СЂР°РјРё РєРѕРЅРєСЂРµС‚РЅРѕРіРѕ DXF, С‚РѕРјСѓ Р±РµСЂРµРјРѕ С—С… С‚С–Р»СЊРєРё Р· ProjectFiles.
         axis_link_mode = self.normalize_axis_link_mode(
             file_row.AxisLinkMode or "normal",
             file_row.LinkX,
@@ -3960,7 +4188,7 @@ class ParametricDb:
             "source_width": source_width,
             "source_height": source_height,
 
-            # Цільові розміри тільки для UI. Вони не є постійним станом БД.
+            # Р¦С–Р»СЊРѕРІС– СЂРѕР·РјС–СЂРё С‚С–Р»СЊРєРё РґР»СЏ UI. Р’РѕРЅРё РЅРµ С” РїРѕСЃС‚С–Р№РЅРёРј СЃС‚Р°РЅРѕРј Р‘Р”.
             "target_width": source_width,
             "target_height": source_height,
 
@@ -4035,10 +4263,10 @@ class ParametricDb:
                 "k_h": float(gr.K_H or 0),
                 "growth_p_w": float(gr.Growth_P_W or 0),
                 "growth_p_h": float(gr.Growth_P_H or 0),
-                "growth_dir_x": gr.Growth_Dir_X or "Центр",
-                "growth_dir_y": gr.Growth_Dir_Y or "Центр",
-                "shift_dir_x": gr.Shift_Dir_X or "Вправо",
-                "shift_dir_y": gr.Shift_Dir_Y or "Вгору",
+                "growth_dir_x": gr.Growth_Dir_X or "Р¦РµРЅС‚СЂ",
+                "growth_dir_y": gr.Growth_Dir_Y or "Р¦РµРЅС‚СЂ",
+                "shift_dir_x": gr.Shift_Dir_X or "Р’РїСЂР°РІРѕ",
+                "shift_dir_y": gr.Shift_Dir_Y or "Р’РіРѕСЂСѓ",
                 "link_x": gr.Link_X or "X = W",
                 "link_y": gr.Link_Y or "Y = H",
                 "resizes": bool(gr.Resizes),
@@ -4177,7 +4405,7 @@ class ParametricDb:
     ) -> bool:
         try:
             if not os.path.exists(export_path):
-                self.last_error = f"Export DXF не знайдено: {export_path}"
+                self.last_error = f"Export DXF РЅРµ Р·РЅР°Р№РґРµРЅРѕ: {export_path}"
                 return False
 
             with open(export_path, "rb") as f:
