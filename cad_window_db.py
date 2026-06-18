@@ -14172,8 +14172,22 @@ class MiniCAD(QMainWindow):
     def read_dxf_doc_from_bytes(self, data):
         if isinstance(data, memoryview):
             data = data.tobytes()
-        text = bytes(data).decode("utf-8", errors="surrogateescape")
-        return ezdxf.read(io.StringIO(text))
+        raw = bytes(data)
+        last_error = None
+        for encoding in ("utf-8", "cp1251", "cp1252", "latin1"):
+            try:
+                stream = io.TextIOWrapper(
+                    io.BytesIO(raw),
+                    encoding=encoding,
+                    errors="surrogateescape",
+                    newline=None,
+                )
+                doc = ezdxf.read(stream)
+                doc._parametric_source_encoding = encoding
+                return doc
+            except Exception as exc:
+                last_error = exc
+        raise RuntimeError(f"Не вдалося прочитати DXF з БД як текстовий DXF: {last_error}")
 
     def dxf_doc_to_bytes(self, doc=None):
         stream = io.StringIO()
@@ -14192,7 +14206,7 @@ class MiniCAD(QMainWindow):
                 self.dxf_doc_to_bytes(),
             )
             return
-        self.save_current_dxf()
+        self.doc.saveas(self.dxf_path)
 
     def init_ui(self):
         self.load_ui_shell()
@@ -16971,6 +16985,8 @@ class MiniCAD(QMainWindow):
             self.project_dir = f"db://door_model/{record.get('door_model_id') or 'unknown'}"
             self.dxf_path = f"db://project_file/{project_file_id}/{file_name}"
             self.doc = self.read_dxf_doc_from_bytes(data)
+            entity_count = sum(1 for _ in self.doc.modelspace())
+            source_encoding = getattr(self.doc, "_parametric_source_encoding", "unknown")
 
             self.selected_handles.clear()
             self.parametric_groups.clear()
@@ -17002,7 +17018,10 @@ class MiniCAD(QMainWindow):
             self.update_history_buttons_state()
             self.update_file_status_panel()
             if hasattr(self, "lbl_status_calc"):
-                self.lbl_status_calc.setText(f"<font color='#a5d6a7'>DXF відкрито з БД: {file_name}</font>")
+                self.lbl_status_calc.setText(
+                    f"<font color='#a5d6a7'>DXF відкрито з БД: {file_name}; "
+                    f"bytes={len(data)}; msp={entity_count}; enc={source_encoding}</font>"
+                )
             return True
         except Exception as exc:
             self.project_dir = old_state["project_dir"]
@@ -20155,7 +20174,9 @@ class MiniCAD(QMainWindow):
             for record in self.db.get_model_files(model.get("id")):
                 file_name = record.get("file_name") or f"DB file {record.get('id')}"
                 status = record.get("status") or ""
-                child = QTreeWidgetItem([f"DXF {file_name} {status}".strip()])
+                size = record.get("file_data_size")
+                size_text = f" [{size} b]" if size is not None else ""
+                child = QTreeWidgetItem([f"DXF {file_name} {status}{size_text}".strip()])
                 child.setData(0, Qt.ItemDataRole.UserRole, {"type": "db_file", **record})
                 model_item.addChild(child)
                 if record.get("id") == self.current_project_file_id:

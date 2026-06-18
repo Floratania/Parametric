@@ -4054,7 +4054,15 @@ class ParametricDb:
             with self.connect() as conn:
                 rows = conn.cursor().execute(
                     """
-                    SELECT Id, FileName, FileExtension, Status, CreatedAt, UpdatedAt
+                    SELECT
+                        Id,
+                        FileName,
+                        FileExtension,
+                        DoorModelId,
+                        Status,
+                        CreatedAt,
+                        UpdatedAt,
+                        DATALENGTH(FileData) AS FileDataSize
                     FROM dbo.ProjectFiles
                     WHERE DoorModelId = ?
                     ORDER BY FileName
@@ -4067,7 +4075,9 @@ class ParametricDb:
                         "id": int(r.Id),
                         "file_name": r.FileName,
                         "extension": r.FileExtension,
+                        "door_model_id": int(r.DoorModelId) if r.DoorModelId else None,
                         "status": r.Status,
+                        "file_data_size": int(r.FileDataSize or 0),
                         "created_at": r.CreatedAt,
                         "updated_at": r.UpdatedAt,
                     }
