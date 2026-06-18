@@ -13851,25 +13851,40 @@ class MiniCAD(QMainWindow):
         input_full_name = QLineEdit()
         input_password = QLineEdit()
         input_password.setEchoMode(QLineEdit.EchoMode.Password)
+        roles = self.db.list_roles() if getattr(self, "db", None) else []
+        combo_role = QComboBox()
+        role_by_label = {}
+        for role in roles:
+            label = f"{role.get('id')} | {role.get('name')}"
+            combo_role.addItem(label)
+            role_by_label[label] = role
         check_admin = QCheckBox("Адміністратор")
         form.addRow("Логін:", input_username)
         form.addRow("Ім'я:", input_full_name)
         form.addRow("Пароль:", input_password)
-        form.addRow("", check_admin)
+        if roles:
+            form.addRow("Роль:", combo_role)
+        else:
+            form.addRow("", check_admin)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
+        selected_role = role_by_label.get(combo_role.currentText()) if roles else None
         user_id = self.db.create_user(
             input_username.text(),
             input_password.text(),
             input_full_name.text(),
-            check_admin.isChecked(),
+            check_admin.isChecked() or str((selected_role or {}).get("name", "")).strip().lower() in ("admin", "administrator", "адмін", "администратор"),
+            (selected_role or {}).get("id"),
         )
         if user_id:
-            QMessageBox.information(self, "Адмін", f"Користувача створено: {input_username.text()}")
+            warning = ""
+            if roles and not self.db.user_role_name(user_id):
+                warning = "\n\nУвага: роль не прив'язалась. Перевірте, чи є RoleId/UserRoleId у Users або таблиця UserRoles(UserId, RoleId)."
+            QMessageBox.information(self, "Адмін", f"Користувача створено: {input_username.text()}{warning}")
         else:
             QMessageBox.warning(self, "Адмін", f"Не вдалося створити користувача:\n{self.db.last_error}")
 

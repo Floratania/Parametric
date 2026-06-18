@@ -3239,12 +3239,115 @@ class ParametricDb:
             self.last_error = str(exc)
             return []
 
+    def table_exists(self, table_name: str) -> bool:
+        try:
+            with self.connect() as conn:
+                value = self._scalar(
+                    conn.cursor(),
+                    """
+                    SELECT COUNT(*)
+                    FROM INFORMATION_SCHEMA.TABLES
+                    WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = ?
+                    """,
+                    table_name,
+                )
+                return bool(value)
+        except Exception as exc:
+            self.last_error = str(exc)
+            return False
+
     def fetchone_dict(self, cur) -> Optional[Dict[str, Any]]:
         row = cur.fetchone()
         if not row:
             return None
         columns = [desc[0] for desc in cur.description]
         return {columns[i]: row[i] for i in range(len(columns))}
+
+    def list_roles(self) -> List[Dict[str, Any]]:
+        try:
+            with self.connect() as conn:
+                rows = conn.cursor().execute(
+                    "SELECT Id, Name FROM dbo.Roles ORDER BY Name"
+                ).fetchall()
+                return [{"id": int(r.Id), "name": str(r.Name)} for r in rows]
+        except Exception as exc:
+            self.last_error = str(exc)
+            return []
+
+    def user_role_link_table(self) -> Optional[str]:
+        for table_name in ("UserRoles", "UserRole", "UserRoleMap"):
+            if not self.table_exists(table_name):
+                continue
+            columns = set(self.table_columns(table_name))
+            if {"UserId", "RoleId"}.issubset(columns):
+                return table_name
+        return None
+
+    def role_name_by_id(self, role_id: Optional[int]) -> str:
+        if not role_id:
+            return ""
+        try:
+            with self.connect() as conn:
+                name = self._scalar(conn.cursor(), "SELECT Name FROM dbo.Roles WHERE Id = ?", role_id)
+                return str(name or "")
+        except Exception as exc:
+            self.last_error = str(exc)
+            return ""
+
+    def user_role_name(self, user_id: int, user_row: Optional[Dict[str, Any]] = None) -> str:
+        user_row = user_row or {}
+        role = str(user_row.get("Role") or user_row.get("UserRole") or "").strip()
+        if role:
+            return role
+        role_id = user_row.get("RoleId") or user_row.get("UserRoleId")
+        if role_id:
+            return self.role_name_by_id(int(role_id))
+        link_table = self.user_role_link_table()
+        if link_table:
+            try:
+                with self.connect() as conn:
+                    role_name = self._scalar(
+                        conn.cursor(),
+                        f"""
+                        SELECT TOP 1 r.Name
+                        FROM dbo.{link_table} ur
+                        JOIN dbo.Roles r ON r.Id = ur.RoleId
+                        WHERE ur.UserId = ?
+                        ORDER BY r.Name
+                        """,
+                        user_id,
+                    )
+                    return str(role_name or "")
+            except Exception as exc:
+                self.last_error = str(exc)
+        return ""
+
+    def set_user_role(self, user_id: int, role_id: Optional[int]) -> bool:
+        if not role_id:
+            return True
+        try:
+            columns = self.table_columns("Users")
+            with self.connect() as conn:
+                cur = conn.cursor()
+                if "RoleId" in columns:
+                    cur.execute("UPDATE dbo.Users SET RoleId = ? WHERE Id = ?", role_id, user_id)
+                    conn.commit()
+                    return True
+                if "UserRoleId" in columns:
+                    cur.execute("UPDATE dbo.Users SET UserRoleId = ? WHERE Id = ?", role_id, user_id)
+                    conn.commit()
+                    return True
+                link_table = self.user_role_link_table()
+                if link_table:
+                    cur.execute(f"DELETE FROM dbo.{link_table} WHERE UserId = ?", user_id)
+                    cur.execute(f"INSERT INTO dbo.{link_table} (UserId, RoleId) VALUES (?, ?)", user_id, role_id)
+                    conn.commit()
+                    return True
+            self.last_error = "У схемі БД немає зв'язку Users -> Roles."
+            return False
+        except Exception as exc:
+            self.last_error = str(exc)
+            return False
 
     # ============================================================
     # AUTH
@@ -3271,7 +3374,7 @@ class ParametricDb:
             if not row:
                 return None
 
-            role = str(row.get("Role") or row.get("UserRole") or "").strip().lower()
+            role = self.user_role_name(int(row.get("Id")), row).strip().lower()
             is_admin = bool(row.get("IsAdmin")) or role in ("admin", "administrator", "адмін", "администратор")
             if str(row.get("Username") or "").strip().lower() == "admin":
                 is_admin = True
@@ -3287,7 +3390,7 @@ class ParametricDb:
     def list_users(self) -> List[Dict[str, Any]]:
         try:
             columns = self.table_columns("Users")
-            optional = [name for name in ("IsAdmin", "Role", "UserRole") if name in columns]
+            optional = [name for name in ("IsAdmin", "Role", "UserRole", "RoleId", "UserRoleId") if name in columns]
             select_cols = ["Id", "Username", "FullName", "IsActive"] + optional
             with self.connect() as conn:
                 cur = conn.cursor()
@@ -3297,7 +3400,7 @@ class ParametricDb:
                 result = []
                 for row in rows:
                     data = {names[i]: row[i] for i in range(len(names))}
-                    role = str(data.get("Role") or data.get("UserRole") or "").strip().lower()
+                    role = self.user_role_name(int(data.get("Id")), data).strip().lower()
                     is_admin = bool(data.get("IsAdmin")) or role in ("admin", "administrator", "адмін", "администратор")
                     if str(data.get("Username") or "").strip().lower() == "admin":
                         is_admin = True
@@ -3314,7 +3417,14 @@ class ParametricDb:
             self.last_error = str(exc)
             return []
 
-    def create_user(self, username: str, password: str, full_name: str = "", is_admin: bool = False) -> Optional[int]:
+    def create_user(
+        self,
+        username: str,
+        password: str,
+        full_name: str = "",
+        is_admin: bool = False,
+        role_id: Optional[int] = None,
+    ) -> Optional[int]:
         username = str(username or "").strip()
         if not username or not password:
             self.last_error = "Username and password are required."
@@ -3328,14 +3438,22 @@ class ParametricDb:
                 insert_cols.insert(-1, "IsAdmin")
                 values_sql.insert(-1, "?")
                 params.append(1 if is_admin else 0)
+            elif "RoleId" in columns and role_id:
+                insert_cols.insert(-1, "RoleId")
+                values_sql.insert(-1, "?")
+                params.append(int(role_id))
+            elif "UserRoleId" in columns and role_id:
+                insert_cols.insert(-1, "UserRoleId")
+                values_sql.insert(-1, "?")
+                params.append(int(role_id))
             elif "Role" in columns:
                 insert_cols.insert(-1, "Role")
                 values_sql.insert(-1, "?")
-                params.append("admin" if is_admin else "user")
+                params.append(self.role_name_by_id(role_id) if role_id else ("admin" if is_admin else "user"))
             elif "UserRole" in columns:
                 insert_cols.insert(-1, "UserRole")
                 values_sql.insert(-1, "?")
-                params.append("admin" if is_admin else "user")
+                params.append(self.role_name_by_id(role_id) if role_id else ("admin" if is_admin else "user"))
 
             with self.connect() as conn:
                 cur = conn.cursor()
@@ -3352,6 +3470,8 @@ class ParametricDb:
                 )
                 user_id = int(cur.fetchone()[0])
                 conn.commit()
+                if role_id and "RoleId" not in columns and "UserRoleId" not in columns and "Role" not in columns and "UserRole" not in columns:
+                    self.set_user_role(user_id, role_id)
                 return user_id
         except Exception as exc:
             self.last_error = str(exc)
