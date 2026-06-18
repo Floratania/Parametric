@@ -13412,7 +13412,8 @@ from PySide6.QtWidgets import (
     QListWidget, QListWidgetItem, QPushButton, QCheckBox,
     QGroupBox, QGraphicsRectItem, QComboBox, QLineEdit, QGraphicsView, 
     QGraphicsScene, QAbstractItemView, QGraphicsEllipseItem, QInputDialog, QFileDialog, QMessageBox,
-    QGridLayout, QGraphicsTextItem, QGraphicsSimpleTextItem, QGraphicsItem, QTabWidget, QSizePolicy
+    QGridLayout, QGraphicsTextItem, QGraphicsSimpleTextItem, QGraphicsItem, QTabWidget, QSizePolicy,
+    QTreeWidget, QTreeWidgetItem
 )
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QColor, QBrush, QPen, QPainterPath, QPainter, QGuiApplication
@@ -14153,7 +14154,8 @@ class MiniCAD(QMainWindow):
         self.btn_load_json_settings.clicked.connect(self.load_config_from_json_file)
         folder_explorer_layout.addWidget(self.btn_load_json_settings)
         
-        self.file_explorer_list = QListWidget()
+        self.file_explorer_list = QTreeWidget()
+        self.file_explorer_list.setHeaderHidden(True)
         self.file_explorer_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.file_explorer_list.itemSelectionChanged.connect(self.on_dxf_selection_changed_in_explorer)
         folder_explorer_layout.addWidget(self.file_explorer_list)
@@ -20020,10 +20022,64 @@ class MiniCAD(QMainWindow):
         self.update_history_buttons_state()
         self.is_loading_history = False
 
+    def populate_db_model_tree(self):
+        models = self.db.list_door_models()
+        if not models:
+            return False
+
+        current_item = None
+        for model in models:
+            model_name = model.get("model_name") or f"Model {model.get('id')}"
+            width = model.get("source_width")
+            height = model.get("source_height")
+            size_text = ""
+            if width is not None and height is not None:
+                size_text = f" [{self.format_dimension_value(width)}x{self.format_dimension_value(height)}]"
+
+            model_item = QTreeWidgetItem([f"Модель {model_name}{size_text} ({model.get('file_count', 0)})"])
+            model_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "model", **model})
+            self.file_explorer_list.addTopLevelItem(model_item)
+
+            for record in self.db.get_model_files(model.get("id")):
+                file_name = record.get("file_name") or f"DB file {record.get('id')}"
+                status = record.get("status") or ""
+                child = QTreeWidgetItem([f"DXF {file_name} {status}".strip()])
+                child.setData(0, Qt.ItemDataRole.UserRole, {"type": "db_file", **record})
+                model_item.addChild(child)
+                if record.get("id") == self.current_project_file_id:
+                    current_item = child
+
+            if model.get("id") == self.current_door_model_id:
+                model_item.setExpanded(True)
+
+        if current_item is not None:
+            parent = current_item.parent()
+            if parent is not None:
+                parent.setExpanded(True)
+            self.file_explorer_list.setCurrentItem(current_item)
+        else:
+            self.file_explorer_list.expandToDepth(0)
+        return True
+
+    def populate_local_file_tree(self):
+        files = os.listdir(self.project_dir)
+        dxf_files = [f for f in files if f.lower().endswith('.dxf')]
+        for file_name in dxf_files:
+            item = QTreeWidgetItem([f"DXF {file_name}"])
+            item.setData(0, Qt.ItemDataRole.UserRole, file_name)
+            self.file_explorer_list.addTopLevelItem(item)
+            if file_name.lower() == os.path.basename(self.dxf_path).lower():
+                self.file_explorer_list.setCurrentItem(item)
+        return True
+
     def scan_project_folder_for_dxf(self):
         self.file_explorer_list.blockSignals(True)
         self.file_explorer_list.clear()
         try:
+            if self.db_opening_enabled() and self.populate_db_model_tree():
+                self.file_explorer_list.blockSignals(False)
+                return
+
             if self.db_opening_enabled():
                 db_files = self.db.list_project_files()
                 if db_files:
@@ -20031,13 +20087,17 @@ class MiniCAD(QMainWindow):
                         file_name = record.get("file_name") or f"DB file {record.get('id')}"
                         status = record.get("status") or ""
                         data_mark = "data" if record.get("has_file_data", True) else "no data"
-                        item = QListWidgetItem(f"DB {file_name} {status} {data_mark}".strip())
-                        item.setData(Qt.ItemDataRole.UserRole, record)
-                        self.file_explorer_list.addItem(item)
+                        item = QTreeWidgetItem([f"DB {file_name} {status} {data_mark}".strip()])
+                        item.setData(0, Qt.ItemDataRole.UserRole, {"type": "db_file", **record})
+                        self.file_explorer_list.addTopLevelItem(item)
                         if record.get("id") == self.current_project_file_id:
                             self.file_explorer_list.setCurrentItem(item)
                     self.file_explorer_list.blockSignals(False)
                     return
+
+            if self.populate_local_file_tree():
+                self.file_explorer_list.blockSignals(False)
+                return
 
             files = os.listdir(self.project_dir)
             dxf_files = [f for f in files if f.lower().endswith('.dxf')]
@@ -20054,20 +20114,23 @@ class MiniCAD(QMainWindow):
     def on_dxf_selection_changed_in_explorer(self):
         selected_items = self.file_explorer_list.selectedItems()
         if not selected_items: return
-        first_data = selected_items[0].data(Qt.ItemDataRole.UserRole)
+        first_data = selected_items[0].data(0, Qt.ItemDataRole.UserRole)
         if isinstance(first_data, dict):
+            if first_data.get("type") == "model":
+                selected_items[0].setExpanded(not selected_items[0].isExpanded())
+                return
             self.open_dxf_from_db_record(first_data)
             return
         self.selected_handles.clear()
         self.parametric_groups.clear()
-        base_file_name = selected_items[0].data(Qt.ItemDataRole.UserRole)
+        base_file_name = selected_items[0].data(0, Qt.ItemDataRole.UserRole)
         self.current_project_file_id = None
         self.dxf_path = os.path.join(self.project_dir, base_file_name)
         self.doc = ezdxf.readfile(self.dxf_path)
 
         if len(selected_items) > 1:
             for item in selected_items[1:]:
-                addon_file_name = item.data(Qt.ItemDataRole.UserRole)
+                addon_file_name = item.data(0, Qt.ItemDataRole.UserRole)
                 addon_path = os.path.join(self.project_dir, addon_file_name)
                 if os.path.exists(addon_path):
                     try:

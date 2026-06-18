@@ -3456,6 +3456,57 @@ class ParametricDb:
             self.last_error = str(exc)
             return None
 
+    def list_door_models(self, limit: int = 300) -> List[Dict[str, Any]]:
+        try:
+            with self.connect() as conn:
+                rows = conn.cursor().execute(
+                    f"""
+                    SELECT TOP ({int(limit)})
+                        dm.Id,
+                        dm.ModelName,
+                        dm.SourceFolderPath,
+                        dm.SourceWidth,
+                        dm.SourceHeight,
+                        dm.SourceDoorOpening,
+                        dm.CreatedAt,
+                        dm.UpdatedAt,
+                        COUNT(pf.Id) AS FileCount,
+                        MAX(COALESCE(pf.UpdatedAt, pf.CreatedAt)) AS LastFileAt
+                    FROM dbo.DoorModels dm
+                    LEFT JOIN dbo.ProjectFiles pf ON pf.DoorModelId = dm.Id
+                    GROUP BY
+                        dm.Id,
+                        dm.ModelName,
+                        dm.SourceFolderPath,
+                        dm.SourceWidth,
+                        dm.SourceHeight,
+                        dm.SourceDoorOpening,
+                        dm.CreatedAt,
+                        dm.UpdatedAt
+                    ORDER BY COALESCE(MAX(COALESCE(pf.UpdatedAt, pf.CreatedAt)), dm.UpdatedAt, dm.CreatedAt) DESC,
+                             dm.ModelName
+                    """
+                ).fetchall()
+
+                return [
+                    {
+                        "id": int(row.Id),
+                        "model_name": row.ModelName,
+                        "folder_path": row.SourceFolderPath,
+                        "source_width": self._to_float(row.SourceWidth),
+                        "source_height": self._to_float(row.SourceHeight),
+                        "source_door_opening": row.SourceDoorOpening,
+                        "file_count": int(row.FileCount or 0),
+                        "created_at": row.CreatedAt,
+                        "updated_at": row.UpdatedAt,
+                        "last_file_at": row.LastFileAt,
+                    }
+                    for row in rows
+                ]
+        except Exception as exc:
+            self.last_error = str(exc)
+            return []
+
     def find_door_model_by_folder(self, folder_path: str) -> Optional[int]:
         try:
             folder_path = os.path.abspath(folder_path)
