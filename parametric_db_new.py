@@ -3194,6 +3194,10 @@ class ParametricDb:
                             source_height,
                             source_opening,
                             current_opening,
+                            project_meta.get("growth_axis") or "both",
+                            file_axis_link_mode,
+                            file_link_x,
+                            file_link_y,
                             user_id,
                         )
 
@@ -3645,6 +3649,84 @@ class ParametricDb:
             self.last_error = str(exc)
             return None
 
+    def update_rule_template(
+        self,
+        template_id: int,
+        name: str,
+        description: str,
+        rule: Dict[str, Any],
+        user_id: int,
+        is_system: bool = False,
+        is_active: bool = True,
+    ) -> bool:
+        name = str(name or "").strip()
+        if not name:
+            self.last_error = "Rule template name is required."
+            return False
+        try:
+            with self.connect() as conn:
+                cur = conn.cursor()
+                duplicate = self._scalar(
+                    cur,
+                    "SELECT TOP 1 Id FROM dbo.RuleTemplates WHERE Name = ? AND Id <> ?",
+                    name,
+                    template_id,
+                )
+                if duplicate:
+                    self.last_error = f"Rule template already exists: {name}"
+                    return False
+                cur.execute(
+                    """
+                    UPDATE dbo.RuleTemplates
+                    SET Name = ?, Description = ?,
+                        K_W = ?, K_H = ?, Growth_P_W = ?, Growth_P_H = ?,
+                        Growth_Dir_X = ?, Growth_Dir_Y = ?,
+                        Shift_Dir_X = ?, Shift_Dir_Y = ?,
+                        Link_X = ?, Link_Y = ?,
+                        IsSystem = ?, IsActive = ?,
+                        CreatedByUserId = ?
+                    WHERE Id = ?
+                    """,
+                    name,
+                    description or "",
+                    float(rule.get("k_w", 0.0) or 0.0),
+                    float(rule.get("k_h", 0.0) or 0.0),
+                    float(rule.get("growth_p_w", 0.0) or 0.0),
+                    float(rule.get("growth_p_h", 0.0) or 0.0),
+                    rule.get("growth_dir_x") or "Центр",
+                    rule.get("growth_dir_y") or "Центр",
+                    rule.get("shift_dir_x") or "Вправо",
+                    rule.get("shift_dir_y") or "Вгору",
+                    rule.get("link_x") or "X = W",
+                    rule.get("link_y") or "Y = H",
+                    1 if is_system else 0,
+                    1 if is_active else 0,
+                    user_id,
+                    template_id,
+                )
+                conn.commit()
+            return True
+        except Exception as exc:
+            self.last_error = str(exc)
+            return False
+
+    def deactivate_rule_template(self, template_id: int) -> bool:
+        try:
+            with self.connect() as conn:
+                conn.cursor().execute(
+                    "UPDATE dbo.RuleTemplates SET IsActive = 0 WHERE Id = ?",
+                    template_id,
+                )
+                conn.commit()
+            return True
+        except Exception as exc:
+            self.last_error = str(exc)
+            return False
+
+    def delete_rule_template(self, template_id: int) -> bool:
+        # Keep old projects reproducible; deleting a rule means hiding it from constructors.
+        return self.deactivate_rule_template(template_id)
+
     def list_group_name_suggestions(self) -> List[str]:
         try:
             names = set()
@@ -3759,10 +3841,6 @@ class ParametricDb:
                         source_width,
                         source_height,
                         source_door_opening or "left",
-                        growth_axis or "both",
-                        axis_link_mode or "normal",
-                        link_x or "X = W",
-                        link_y or "Y = H",
                         user_id,
                         model_id,
                     )
@@ -3806,6 +3884,106 @@ class ParametricDb:
                     user_id,
                     door_model_id,
                 )
+                conn.commit()
+            return True
+        except Exception as exc:
+            self.last_error = str(exc)
+            return False
+
+    def update_door_model_manual(
+        self,
+        door_model_id: int,
+        model_name: str,
+        source_width: Optional[float],
+        source_height: Optional[float],
+        source_door_opening: str,
+        user_id: int,
+        update_project_files: bool = True,
+    ) -> bool:
+        try:
+            with self.connect() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    UPDATE dbo.DoorModels
+                    SET
+                        ModelName = ?,
+                        SourceWidth = ?,
+                        SourceHeight = ?,
+                        SourceDoorOpening = ?,
+                        UpdatedByUserId = ?,
+                        UpdatedAt = SYSDATETIME()
+                    WHERE Id = ?
+                    """,
+                    model_name,
+                    source_width,
+                    source_height,
+                    source_door_opening or "left",
+                    user_id,
+                    door_model_id,
+                )
+                if update_project_files:
+                    cur.execute(
+                        """
+                        UPDATE dbo.ProjectFiles
+                        SET
+                            SourceWidth = ?,
+                            SourceHeight = ?,
+                            SourceDoorOpening = ?,
+                            UpdatedByUserId = ?,
+                            UpdatedAt = SYSDATETIME()
+                        WHERE DoorModelId = ?
+                        """,
+                        source_width,
+                        source_height,
+                        source_door_opening or "left",
+                        user_id,
+                        door_model_id,
+                    )
+                conn.commit()
+            return True
+        except Exception as exc:
+            self.last_error = str(exc)
+            return False
+
+    def assign_project_files_to_model(
+        self,
+        project_file_ids: List[int],
+        door_model_id: int,
+        user_id: int,
+    ) -> bool:
+        ids = [int(value) for value in project_file_ids if value]
+        if not ids:
+            self.last_error = "No ProjectFiles selected."
+            return False
+        try:
+            model = self.load_door_model(door_model_id)
+            if not model:
+                self.last_error = f"DoorModel not found: {door_model_id}"
+                return False
+            meta = model.get("meta") or {}
+            with self.connect() as conn:
+                cur = conn.cursor()
+                for file_id in ids:
+                    cur.execute(
+                        """
+                        UPDATE dbo.ProjectFiles
+                        SET
+                            DoorModelId = ?,
+                            SourceWidth = ?,
+                            SourceHeight = ?,
+                            SourceDoorOpening = ?,
+                            UpdatedByUserId = ?,
+                            UpdatedAt = SYSDATETIME()
+                        WHERE Id = ?
+                        """,
+                        door_model_id,
+                        meta.get("source_width"),
+                        meta.get("source_height"),
+                        meta.get("source_door_opening") or meta.get("door_opening") or "left",
+                        user_id,
+                        file_id,
+                    )
                 conn.commit()
             return True
         except Exception as exc:

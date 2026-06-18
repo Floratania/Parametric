@@ -14093,7 +14093,194 @@ class MiniCAD(QMainWindow):
     def admin_add_rule_from_controls(self):
         if not self.admin_require():
             return
-        self.admin_save_rule("Нове правило", self.rule_from_current_controls())
+        self.admin_edit_rule_dialog(None, self.rule_from_current_controls())
+
+    def admin_rule_choices(self, active_only=False):
+        rows = self.db.list_rule_templates(active_only=active_only) if getattr(self, "db", None) else []
+        choices = []
+        by_label = {}
+        for row in rows:
+            state = "активне" if row.get("is_active") else "вимкнене"
+            system = "system" if row.get("is_system") else "custom"
+            label = f"{row.get('id')} | {row.get('name')} | {state} | {system}"
+            choices.append(label)
+            by_label[label] = row
+        return choices, by_label
+
+    def admin_pick_rule(self, title="Правило"):
+        choices, by_label = self.admin_rule_choices(active_only=False)
+        if not choices:
+            QMessageBox.information(self, "Адмін", "Правил у RuleTemplates не знайдено.")
+            return None
+        label, ok = QInputDialog.getItem(self, title, "Виберіть правило:", choices, 0, False)
+        if not ok or not label:
+            return None
+        return by_label.get(label)
+
+    def add_combo_value(self, combo, value):
+        value = str(value or "").strip()
+        if value and combo.findText(value) < 0:
+            combo.addItem(value)
+        if value:
+            combo.setCurrentText(value)
+
+    def admin_rule_dialog_values(self, template=None, default_rule=None):
+        template = template or {}
+        rule = dict(default_rule or {})
+        for key in (
+            "k_w", "k_h", "growth_p_w", "growth_p_h",
+            "growth_dir_x", "growth_dir_y", "shift_dir_x", "shift_dir_y",
+            "link_x", "link_y",
+        ):
+            if key in template:
+                rule[key] = template.get(key)
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Правило обробки")
+        form = QFormLayout(dialog)
+
+        input_name = QLineEdit(str(template.get("name") or "Нове правило"))
+        input_desc = QLineEdit(str(template.get("description") or ""))
+        input_k_w = QLineEdit(str(rule.get("k_w", 0.0)))
+        input_k_h = QLineEdit(str(rule.get("k_h", 0.0)))
+        input_growth_p_w = QLineEdit(str(rule.get("growth_p_w", 0.0)))
+        input_growth_p_h = QLineEdit(str(rule.get("growth_p_h", 0.0)))
+
+        combo_growth_dir_x = QComboBox()
+        combo_growth_dir_x.setEditable(True)
+        combo_growth_dir_x.addItems(["Центр", "Вправо", "Вліво"])
+        self.add_combo_value(combo_growth_dir_x, rule.get("growth_dir_x", "Центр"))
+
+        combo_growth_dir_y = QComboBox()
+        combo_growth_dir_y.setEditable(True)
+        combo_growth_dir_y.addItems(["Центр", "Вгору", "Вниз"])
+        self.add_combo_value(combo_growth_dir_y, rule.get("growth_dir_y", "Центр"))
+
+        combo_shift_dir_x = QComboBox()
+        combo_shift_dir_x.setEditable(True)
+        combo_shift_dir_x.addItems(["Вправо", "Вліво"])
+        self.add_combo_value(combo_shift_dir_x, rule.get("shift_dir_x", "Вправо"))
+
+        combo_shift_dir_y = QComboBox()
+        combo_shift_dir_y.setEditable(True)
+        combo_shift_dir_y.addItems(["Вгору", "Вниз"])
+        self.add_combo_value(combo_shift_dir_y, rule.get("shift_dir_y", "Вгору"))
+
+        combo_link_x = QComboBox()
+        combo_link_x.setEditable(True)
+        combo_link_x.addItems(["X = W", "X = H"])
+        self.add_combo_value(combo_link_x, rule.get("link_x", "X = W"))
+
+        combo_link_y = QComboBox()
+        combo_link_y.setEditable(True)
+        combo_link_y.addItems(["Y = H", "Y = W"])
+        self.add_combo_value(combo_link_y, rule.get("link_y", "Y = H"))
+
+        check_system = QCheckBox("Системне")
+        check_system.setChecked(bool(template.get("is_system", False)))
+        check_active = QCheckBox("Активне")
+        check_active.setChecked(bool(template.get("is_active", True)))
+
+        form.addRow("Name:", input_name)
+        form.addRow("Description:", input_desc)
+        form.addRow("K_W:", input_k_w)
+        form.addRow("K_H:", input_k_h)
+        form.addRow("Growth_P_W:", input_growth_p_w)
+        form.addRow("Growth_P_H:", input_growth_p_h)
+        form.addRow("Growth_Dir_X:", combo_growth_dir_x)
+        form.addRow("Growth_Dir_Y:", combo_growth_dir_y)
+        form.addRow("Shift_Dir_X:", combo_shift_dir_x)
+        form.addRow("Shift_Dir_Y:", combo_shift_dir_y)
+        form.addRow("Link_X:", combo_link_x)
+        form.addRow("Link_Y:", combo_link_y)
+        form.addRow("", check_system)
+        form.addRow("", check_active)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+
+        return {
+            "name": input_name.text().strip(),
+            "description": input_desc.text().strip(),
+            "rule": {
+                "k_w": self.parse_numeric_text(input_k_w.text()) or 0.0,
+                "k_h": self.parse_numeric_text(input_k_h.text()) or 0.0,
+                "growth_p_w": self.parse_numeric_text(input_growth_p_w.text()) or 0.0,
+                "growth_p_h": self.parse_numeric_text(input_growth_p_h.text()) or 0.0,
+                "growth_dir_x": combo_growth_dir_x.currentText().strip() or "Центр",
+                "growth_dir_y": combo_growth_dir_y.currentText().strip() or "Центр",
+                "shift_dir_x": combo_shift_dir_x.currentText().strip() or "Вправо",
+                "shift_dir_y": combo_shift_dir_y.currentText().strip() or "Вгору",
+                "link_x": combo_link_x.currentText().strip() or "X = W",
+                "link_y": combo_link_y.currentText().strip() or "Y = H",
+            },
+            "is_system": check_system.isChecked(),
+            "is_active": check_active.isChecked(),
+        }
+
+    def admin_edit_rule_dialog(self, template=None, default_rule=None):
+        values = self.admin_rule_dialog_values(template=template, default_rule=default_rule)
+        if not values:
+            return
+        if template and template.get("id"):
+            ok = self.db.update_rule_template(
+                int(template.get("id")),
+                values["name"],
+                values["description"],
+                values["rule"],
+                self.current_user_id(),
+                values["is_system"],
+                values["is_active"],
+            )
+            message = "Правило оновлено."
+        else:
+            ok = bool(self.db.save_rule_template(
+                values["name"],
+                values["description"],
+                values["rule"],
+                self.current_user_id(),
+                values["is_system"],
+                values["is_active"],
+            ))
+            message = "Правило створено."
+        if ok:
+            self.refresh_rule_library_combo()
+            QMessageBox.information(self, "Адмін", message)
+        else:
+            QMessageBox.warning(self, "Адмін", f"Не вдалося зберегти правило:\n{self.db.last_error}")
+
+    def admin_edit_rule_template(self):
+        if not self.admin_require():
+            return
+        template = self.admin_pick_rule("Редагувати правило")
+        if template:
+            self.admin_edit_rule_dialog(template=template)
+
+    def admin_delete_rule_template(self):
+        if not self.admin_require():
+            return
+        template = self.admin_pick_rule("Вимкнути правило")
+        if not template:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Вимкнути правило",
+            f"Вимкнути правило '{template.get('name')}'? Воно зникне зі списку активних правил.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        if self.db.delete_rule_template(int(template.get("id"))):
+            self.refresh_rule_library_combo()
+            QMessageBox.information(self, "Адмін", "Правило вимкнено.")
+        else:
+            QMessageBox.warning(self, "Адмін", f"Не вдалося вимкнути правило:\n{self.db.last_error}")
 
     def save_current_project_to_db(self, status="ConfigSaved"):
         if not getattr(self, "db", None) or not self.current_user_id():
@@ -14131,6 +14318,162 @@ class MiniCAD(QMainWindow):
             self.lbl_status_calc.setText(
                 f"<font color='#ff9800'>БД не прийняла запис: {self.db.last_error}</font>"
             )
+
+    def door_model_choices(self):
+        models = self.db.list_door_models() if getattr(self, "db", None) else []
+        choices = []
+        by_label = {}
+        for model in models:
+            name = model.get("model_name") or f"Model {model.get('id')}"
+            width = self.format_dimension_value(model.get("source_width"))
+            height = self.format_dimension_value(model.get("source_height"))
+            label = f"{model.get('id')} | {name} | {width} x {height} | файлів: {model.get('file_count', 0)}"
+            choices.append(label)
+            by_label[label] = model
+        return choices, by_label
+
+    def pick_door_model(self, title="Модель"):
+        choices, by_label = self.door_model_choices()
+        if not choices:
+            QMessageBox.information(self, "Модель", "У БД немає моделей.")
+            return None
+        current_id = getattr(self, "current_door_model_id", None)
+        current_index = 0
+        for idx, label in enumerate(choices):
+            if by_label[label].get("id") == current_id:
+                current_index = idx
+                break
+        label, ok = QInputDialog.getItem(self, title, "Виберіть модель:", choices, current_index, False)
+        if not ok or not label:
+            return None
+        return by_label.get(label)
+
+    def edit_current_door_model(self):
+        if not getattr(self, "db", None) or not getattr(self.db, "available", False):
+            QMessageBox.warning(self, "Модель", "БД недоступна.")
+            return
+
+        model = None
+        if getattr(self, "current_door_model_id", None):
+            model = self.db.load_door_model(self.current_door_model_id)
+            if model:
+                model = {
+                    "id": self.current_door_model_id,
+                    "model_name": model.get("model_name"),
+                    "source_width": (model.get("meta") or {}).get("source_width"),
+                    "source_height": (model.get("meta") or {}).get("source_height"),
+                    "source_door_opening": (model.get("meta") or {}).get("source_door_opening"),
+                }
+        if not model:
+            model = self.pick_door_model("Редагувати модель")
+        if not model:
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Редагувати модель")
+        form = QFormLayout(dialog)
+        input_name = QLineEdit(str(model.get("model_name") or f"Model {model.get('id')}"))
+        input_width = QLineEdit(self.format_dimension_value(model.get("source_width")))
+        input_height = QLineEdit(self.format_dimension_value(model.get("source_height")))
+        combo_opening = QComboBox()
+        combo_opening.addItems(["Ліве", "Праве"])
+        if str(model.get("source_door_opening") or "").lower() == "right":
+            combo_opening.setCurrentText("Праве")
+        check_update_files = QCheckBox("Оновити W/H у всіх файлах цієї моделі")
+        check_update_files.setChecked(True)
+        form.addRow("Назва:", input_name)
+        form.addRow("Початкова ширина W:", input_width)
+        form.addRow("Початкова висота H:", input_height)
+        form.addRow("Початкове відкривання:", combo_opening)
+        form.addRow("", check_update_files)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        source_w = self.parse_numeric_text(input_width.text())
+        source_h = self.parse_numeric_text(input_height.text())
+        if source_w is None or source_h is None:
+            QMessageBox.warning(self, "Модель", "Введіть коректні W та H.")
+            return
+        opening = "right" if combo_opening.currentText() == "Праве" else "left"
+        ok = self.db.update_door_model_manual(
+            int(model.get("id")),
+            input_name.text().strip() or f"Model {model.get('id')}",
+            source_w,
+            source_h,
+            opening,
+            self.current_user_id(),
+            update_project_files=check_update_files.isChecked(),
+        )
+        if not ok:
+            QMessageBox.warning(self, "Модель", f"Не вдалося оновити модель:\n{self.db.last_error}")
+            return
+
+        if int(model.get("id")) == getattr(self, "current_door_model_id", None):
+            self.project_meta["source_width"] = source_w
+            self.project_meta["source_height"] = source_h
+            self.project_meta["source_door_opening"] = opening
+            self.project_meta["target_width"] = self.project_meta.get("target_width") or source_w
+            self.project_meta["target_height"] = self.project_meta.get("target_height") or source_h
+            self.update_dimension_inputs_from_meta()
+            self.save_project_config()
+        self.scan_project_folder_for_dxf()
+        self.update_file_status_panel()
+        self.lbl_status_calc.setText("<font color='#a5d6a7'>Параметри моделі оновлено.</font>")
+
+    def attach_current_folder_to_model(self):
+        if not getattr(self, "db", None) or not getattr(self.db, "available", False):
+            QMessageBox.warning(self, "Модель", "БД недоступна.")
+            return
+        model = self.pick_door_model("Прив'язати до моделі")
+        if not model:
+            return
+        target_model_id = int(model.get("id"))
+        model_data = self.db.load_door_model(target_model_id)
+        model_meta = (model_data or {}).get("meta") or {}
+
+        if self.is_db_uri(getattr(self, "project_dir", "")):
+            file_ids = []
+            if getattr(self, "current_project_file_id", None):
+                file_ids = [int(self.current_project_file_id)]
+            elif getattr(self, "current_door_model_id", None):
+                file_ids = [int(row.get("id")) for row in self.db.get_model_files(self.current_door_model_id)]
+            if not file_ids:
+                QMessageBox.warning(self, "Модель", "Немає DB-файлів для прив'язки.")
+                return
+            ok = self.db.assign_project_files_to_model(file_ids, target_model_id, self.current_user_id())
+        else:
+            register_meta = copy.deepcopy(self.project_meta)
+            register_meta["source_width"] = model_meta.get("source_width")
+            register_meta["source_height"] = model_meta.get("source_height")
+            register_meta["source_door_opening"] = model_meta.get("source_door_opening") or "left"
+            register_meta["door_opening"] = register_meta.get("door_opening") or register_meta["source_door_opening"]
+            ok = bool(self.db.register_folder_dxf_files(
+                self.project_dir,
+                register_meta,
+                self.current_user_id(),
+                door_model_id=target_model_id,
+            ))
+
+        if not ok:
+            QMessageBox.warning(self, "Модель", f"Не вдалося прив'язати:\n{self.db.last_error}")
+            return
+
+        self.current_door_model_id = target_model_id
+        self.selected_db_model_id = target_model_id
+        if model_data:
+            self.project_meta["source_width"] = model_meta.get("source_width")
+            self.project_meta["source_height"] = model_meta.get("source_height")
+            self.project_meta["source_door_opening"] = model_meta.get("source_door_opening") or "left"
+            self.project_meta["target_width"] = self.project_meta.get("target_width") or model_meta.get("source_width")
+            self.project_meta["target_height"] = self.project_meta.get("target_height") or model_meta.get("source_height")
+        self.update_dimension_inputs_from_meta()
+        self.scan_project_folder_for_dxf()
+        self.update_file_status_panel()
+        self.lbl_status_calc.setText("<font color='#a5d6a7'>Папку/файли прив'язано до вибраної моделі.</font>")
 
 
     def register_current_folder_model(self, show_errors=True):
@@ -14603,6 +14946,15 @@ class MiniCAD(QMainWindow):
 
         self.file_status_group.setLayout(file_status_box)
         control_panel_layout.addWidget(self.file_status_group)
+
+        model_actions_box = QHBoxLayout()
+        self.btn_edit_door_model = QPushButton("Редагувати модель W/H")
+        self.btn_edit_door_model.clicked.connect(self.edit_current_door_model)
+        model_actions_box.addWidget(self.btn_edit_door_model)
+        self.btn_attach_folder_to_model = QPushButton("Папку до моделі")
+        self.btn_attach_folder_to_model.clicked.connect(self.attach_current_folder_to_model)
+        model_actions_box.addWidget(self.btn_attach_folder_to_model)
+        control_panel_layout.addLayout(model_actions_box)
 
         self.side_tabs = QTabWidget()
         self.side_tabs.setDocumentMode(True)
@@ -15093,9 +15445,15 @@ class MiniCAD(QMainWindow):
         self.btn_admin_save_rule = QPushButton("Зберегти правило з вибраної групи")
         self.btn_admin_save_rule.clicked.connect(self.admin_save_selected_group_rule)
         admin_box.addWidget(self.btn_admin_save_rule)
-        self.btn_admin_add_rule = QPushButton("Додати правило з поточних полів")
+        self.btn_admin_add_rule = QPushButton("Додати правило вручну")
         self.btn_admin_add_rule.clicked.connect(self.admin_add_rule_from_controls)
         admin_box.addWidget(self.btn_admin_add_rule)
+        self.btn_admin_edit_rule = QPushButton("Редагувати правило")
+        self.btn_admin_edit_rule.clicked.connect(self.admin_edit_rule_template)
+        admin_box.addWidget(self.btn_admin_edit_rule)
+        self.btn_admin_delete_rule = QPushButton("Вимкнути правило")
+        self.btn_admin_delete_rule.clicked.connect(self.admin_delete_rule_template)
+        admin_box.addWidget(self.btn_admin_delete_rule)
         self.admin_group.setLayout(admin_box)
         self.admin_group.setVisible(False)
         self.tab_more_layout.addWidget(self.admin_group)
