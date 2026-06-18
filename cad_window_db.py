@@ -1,4 +1,4 @@
-# # import os
+﻿# # import os
 # # import sys
 # # import math
 # # import copy
@@ -13391,6 +13391,7 @@ import os
 import sys
 import math
 import copy
+import io
 import json
 import csv
 import re
@@ -13431,6 +13432,38 @@ except ImportError:
         def clear_redo(self): pass
         def undo(self): return True
         def redo(self): return True
+
+
+class MemoryHistoryManager:
+    def __init__(self, owner):
+        self.owner = owner
+        self.undo_stack = []
+        self.redo_stack = []
+
+    def save_state(self):
+        self.undo_stack.append(self.owner.dxf_doc_to_bytes())
+        if len(self.undo_stack) > 30:
+            self.undo_stack.pop(0)
+
+    def undo(self):
+        if len(self.undo_stack) <= 1:
+            return None
+        current_state = self.undo_stack.pop()
+        self.redo_stack.append(current_state)
+        previous_state = self.undo_stack[-1]
+        self.owner.doc = self.owner.read_dxf_doc_from_bytes(previous_state)
+        return previous_state
+
+    def redo(self):
+        if not self.redo_stack:
+            return None
+        next_state = self.redo_stack.pop()
+        self.undo_stack.append(next_state)
+        self.owner.doc = self.owner.read_dxf_doc_from_bytes(next_state)
+        return next_state
+
+    def clear_redo(self):
+        self.redo_stack.clear()
 
 
 def patch_ezdxf_entities():
@@ -13619,7 +13652,8 @@ class MiniCAD(QMainWindow):
         self.current_theme = "Темна"
         self.current_project_file_id = None
         self.current_door_model_id = None
-        self.db_cache_dir = os.path.join(self.project_dir, "_db_cache")
+        self.selected_db_model_id = None
+        self.current_db_file_name = None
 
         self.selected_handles = set()
         self.overlay_items = {}
@@ -13687,7 +13721,7 @@ class MiniCAD(QMainWindow):
             except Exception as e:
                 print(f"Помилка читання файлу: {e}")
                 self.doc = ezdxf.new()
-                self.doc.saveas(self.dxf_path)
+                self.save_current_dxf()
         else:
             dxf_files = [f for f in os.listdir(self.project_dir) if f.lower().endswith('.dxf')]
             if dxf_files:
@@ -13695,7 +13729,7 @@ class MiniCAD(QMainWindow):
                 self.doc = ezdxf.readfile(self.dxf_path)
             else:
                 self.doc = ezdxf.new()
-                self.doc.saveas(self.dxf_path)
+                self.save_current_dxf()
 
     def default_project_meta(self):
         return {
@@ -13794,6 +13828,8 @@ class MiniCAD(QMainWindow):
     def save_current_project_to_db(self, status="ConfigSaved"):
         if not getattr(self, "db", None) or not self.current_user_id():
             return
+        dxf_bytes = self.dxf_doc_to_bytes() if self.is_db_file_open() else None
+        file_name_override = getattr(self, "current_db_file_name", None) if self.is_db_file_open() else None
 
         project_file_id = self.db.save_project_snapshot(
             self.project_dir,
@@ -13805,6 +13841,8 @@ class MiniCAD(QMainWindow):
             status,
             getattr(self, "current_project_file_id", None),
             getattr(self, "current_door_model_id", None),
+            dxf_bytes,
+            file_name_override,
         )
 
         if project_file_id:
@@ -14127,6 +14165,34 @@ class MiniCAD(QMainWindow):
 
     def db_opening_enabled(self):
         return bool(getattr(self, "db", None) and getattr(self.db, "available", False))
+
+    def is_db_file_open(self):
+        return bool(getattr(self, "current_project_file_id", None) and str(getattr(self, "dxf_path", "")).startswith("db://"))
+
+    def read_dxf_doc_from_bytes(self, data):
+        if isinstance(data, memoryview):
+            data = data.tobytes()
+        text = bytes(data).decode("utf-8", errors="surrogateescape")
+        return ezdxf.read(io.StringIO(text))
+
+    def dxf_doc_to_bytes(self, doc=None):
+        stream = io.StringIO()
+        (doc or self.doc).write(stream)
+        return stream.getvalue().encode("utf-8", errors="surrogateescape")
+
+    def make_history_manager(self):
+        if self.is_db_file_open():
+            return MemoryHistoryManager(self)
+        return HistoryManager(self.dxf_path)
+
+    def save_current_dxf(self):
+        if self.is_db_file_open():
+            self.db.update_project_file_binary(
+                self.current_project_file_id,
+                self.dxf_doc_to_bytes(),
+            )
+            return
+        self.save_current_dxf()
 
     def init_ui(self):
         self.load_ui_shell()
@@ -14754,7 +14820,7 @@ class MiniCAD(QMainWindow):
 
         # ---------- Файл ----------
         QShortcut(QKeySequence("Ctrl+O"), self, self.open_dxf_from_dialog)
-        QShortcut(QKeySequence("Ctrl+S"), self, lambda: self.doc.saveas(self.dxf_path))
+        QShortcut(QKeySequence("Ctrl+S"), self, self.save_current_dxf)
 
         # ---------- Історія ----------
         QShortcut(QKeySequence("Ctrl+Z"), self, self.undo)
@@ -15361,7 +15427,7 @@ class MiniCAD(QMainWindow):
         self.check_door_text_enabled.setChecked(True)
         self.check_door_text_enabled.blockSignals(False)
         self.apply_door_text_to_doc()
-        self.doc.saveas(self.dxf_path)
+        self.save_current_dxf()
         self.save_project_config()
         self.save_original_geometries()
         self.load_entities_into_list()
@@ -15388,7 +15454,7 @@ class MiniCAD(QMainWindow):
         self.check_door_text_enabled.setChecked(False)
         self.check_door_text_enabled.blockSignals(False)
         self.input_door_text.setText("")
-        self.doc.saveas(self.dxf_path)
+        self.save_current_dxf()
         self.save_original_geometries()
         self.save_project_config()
         self.load_entities_into_list()
@@ -15437,7 +15503,7 @@ class MiniCAD(QMainWindow):
             message = "Текстову рамку виставлено по центру висоти полотна."
         self.project_meta["door_text"] = settings
         self.apply_door_text_to_doc()
-        self.doc.saveas(self.dxf_path)
+        self.save_current_dxf()
         self.save_original_geometries()
         self.save_project_config()
         self.sync_text_inputs_from_meta()
@@ -15462,7 +15528,7 @@ class MiniCAD(QMainWindow):
         entity = self.apply_door_text_to_doc()
         if entity is not None:
             self.selected_handles = {entity.dxf.handle}
-        self.doc.saveas(self.dxf_path)
+        self.save_current_dxf()
         self.save_original_geometries()
         self.load_entities_into_list()
         self.sync_list_from_handles()
@@ -15480,7 +15546,7 @@ class MiniCAD(QMainWindow):
         handle = settings.get("handle")
         if handle and handle in self.doc.entitydb:
             self.doc.entitydb[handle].dxf.insert = (settings["x"], settings["y"], 0.0)
-            self.doc.saveas(self.dxf_path)
+            self.save_current_dxf()
             self.selected_handles = {handle}
         self.sync_text_inputs_from_meta()
         self.save_project_config()
@@ -15495,7 +15561,7 @@ class MiniCAD(QMainWindow):
         settings["enabled"] = True
         self.project_meta["door_text"] = settings
         self.apply_door_text_to_doc()
-        self.doc.saveas(self.dxf_path)
+        self.save_current_dxf()
         handle = settings.get("handle")
         if handle:
             self.selected_handles = {handle}
@@ -15793,7 +15859,7 @@ class MiniCAD(QMainWindow):
         )
         self.project_meta["target_door_opening"] = self.project_meta["door_opening"]
 
-        self.doc.saveas(self.dxf_path)
+        self.save_current_dxf()
         self.save_original_geometries()
         self.apply_axis_link_mode_to_groups()
         self.save_project_config()
@@ -16099,7 +16165,7 @@ class MiniCAD(QMainWindow):
             self.record_action_snapshot()
             self.apply_imported_parameters(params)
             self.apply_door_text_to_doc()
-            self.doc.saveas(self.dxf_path)
+            self.save_current_dxf()
             self.save_project_config()
             self.save_original_geometries()
             self.update_dimension_inputs_from_meta()
@@ -16743,6 +16809,7 @@ class MiniCAD(QMainWindow):
             self.block_keep_state.clear()
 
             self.current_project_file_id = None
+            self.current_db_file_name = None
             if folder_changed:
                 self.current_door_model_id = None
 
@@ -16809,6 +16876,37 @@ class MiniCAD(QMainWindow):
             QMessageBox.warning(self, "DB", f"БД недоступна.{chr(10) + error if error else ''}")
             return
 
+        models = self.db.list_door_models()
+        if not models:
+            error = getattr(self.db, "last_error", "")
+            QMessageBox.information(self, "DB", f"У БД немає моделей дверей.{chr(10) + error if error else ''}")
+            return
+
+        labels = []
+        by_label = {}
+        for model in models:
+            model_name = model.get("model_name") or f"Model {model.get('id')}"
+            width = model.get("source_width")
+            height = model.get("source_height")
+            size_text = ""
+            if width is not None and height is not None:
+                size_text = f" | {self.format_dimension_value(width)}x{self.format_dimension_value(height)}"
+            label = f"{model.get('id')} | {model_name}{size_text} | файлів: {model.get('file_count', 0)}"
+            labels.append(label)
+            by_label[label] = model
+
+        label, ok = QInputDialog.getItem(
+            self,
+            "Відкрити з БД",
+            "Виберіть модель / папку:",
+            labels,
+            0,
+            False,
+        )
+        if ok and label:
+            self.open_db_model_folder(by_label[label])
+        return
+
         records = self.db.list_project_files()
         if not records:
             error = getattr(self.db, "last_error", "")
@@ -16836,6 +16934,15 @@ class MiniCAD(QMainWindow):
         if ok and label:
             self.open_dxf_from_db_record(by_label[label])
 
+    def open_db_model_folder(self, model):
+        self.selected_db_model_id = model.get("id")
+        self.current_door_model_id = model.get("id")
+        self.current_project_file_id = None
+        self.scan_project_folder_for_dxf()
+        if hasattr(self, "lbl_status_calc"):
+            model_name = model.get("model_name") or f"Model {model.get('id')}"
+            self.lbl_status_calc.setText(f"<font color='#a5d6a7'>Відкрито папку моделі з БД: {model_name}</font>")
+
     def open_dxf_from_db_record(self, record):
         old_state = {
             "project_dir": getattr(self, "project_dir", None),
@@ -16843,6 +16950,8 @@ class MiniCAD(QMainWindow):
             "doc": getattr(self, "doc", None),
             "project_file_id": getattr(self, "current_project_file_id", None),
             "door_model_id": getattr(self, "current_door_model_id", None),
+            "selected_db_model_id": getattr(self, "selected_db_model_id", None),
+            "db_file_name": getattr(self, "current_db_file_name", None),
             "selected": set(getattr(self, "selected_handles", set())),
             "groups": copy.deepcopy(getattr(self, "parametric_groups", [])),
             "block_keep_state": dict(getattr(self, "block_keep_state", {})),
@@ -16858,15 +16967,10 @@ class MiniCAD(QMainWindow):
             if not file_name.lower().endswith(".dxf"):
                 file_name = f"{file_name}.dxf"
 
-            os.makedirs(self.db_cache_dir, exist_ok=True)
-            safe_name = re.sub(r"[^0-9A-Za-zА-Яа-я_. -]+", "_", file_name)
-            cached_path = os.path.join(self.db_cache_dir, f"{project_file_id}_{safe_name}")
-            with open(cached_path, "wb") as f:
-                f.write(data)
-
-            self.project_dir = os.path.dirname(os.path.abspath(cached_path))
-            self.dxf_path = os.path.abspath(cached_path)
-            self.doc = ezdxf.readfile(self.dxf_path)
+            self.current_db_file_name = file_name
+            self.project_dir = f"db://door_model/{record.get('door_model_id') or 'unknown'}"
+            self.dxf_path = f"db://project_file/{project_file_id}/{file_name}"
+            self.doc = self.read_dxf_doc_from_bytes(data)
 
             self.selected_handles.clear()
             self.parametric_groups.clear()
@@ -16883,10 +16987,11 @@ class MiniCAD(QMainWindow):
                 self.current_project_file_id = project_file_id
                 self.current_door_model_id = record.get("door_model_id")
                 self.load_project_config()
+            self.selected_db_model_id = self.current_door_model_id or record.get("door_model_id")
 
             self.prompt_source_dimensions_on_open()
             self.update_dimension_inputs_from_meta()
-            self.history = HistoryManager(self.dxf_path)
+            self.history = self.make_history_manager()
             self.history.save_state()
             self.save_zones_history_state()
             self.save_original_geometries()
@@ -16905,6 +17010,8 @@ class MiniCAD(QMainWindow):
             self.doc = old_state["doc"]
             self.current_project_file_id = old_state["project_file_id"]
             self.current_door_model_id = old_state["door_model_id"]
+            self.selected_db_model_id = old_state["selected_db_model_id"]
+            self.current_db_file_name = old_state["db_file_name"]
             self.selected_handles = old_state["selected"]
             self.parametric_groups = old_state["groups"]
             self.block_keep_state = old_state["block_keep_state"]
@@ -17021,7 +17128,7 @@ class MiniCAD(QMainWindow):
                     
         self.update_growth_axis_after_transform(mode)
         self.swap_axis_link_mode_for_quarter_turn(mode)
-        self.doc.saveas(self.dxf_path)
+        self.save_current_dxf()
 
         self.commit_current_geometry_as_parametric_base(
             reason=f"TRANSFORM {mode}",
@@ -17060,7 +17167,7 @@ class MiniCAD(QMainWindow):
         settings["y"] = float(settings.get("y", 0.0)) + shift_y
         self.project_meta["door_text"] = settings
 
-        self.doc.saveas(self.dxf_path)
+        self.save_current_dxf()
         self.save_original_geometries()
         self.save_project_config()
         self.push_to_history()
@@ -17092,7 +17199,7 @@ class MiniCAD(QMainWindow):
         self.parametric_groups = [g for g in self.parametric_groups if len(g["handles"]) > 0]
         self.selected_handles.clear()
         
-        self.doc.saveas(self.dxf_path)
+        self.save_current_dxf()
         self.save_project_config()
         self.push_to_history()
         
@@ -19021,7 +19128,7 @@ class MiniCAD(QMainWindow):
             entity.dxf.insert = (new_x, new_y, 0.0)
 
         self.selected_handles = {handle}
-        self.doc.saveas(self.dxf_path)
+        self.save_current_dxf()
         self.save_original_geometries()
         self.load_entities_into_list()
         self.sync_list_from_handles()
@@ -19440,7 +19547,7 @@ class MiniCAD(QMainWindow):
         self.lbl_status_calc.setText(f"<font color='#a5d6a7'>ΔW={delta_w:+.1f} мм | ΔH={delta_h:+.1f} мм</font>")
         self.apply_door_text_to_doc()
         if save_result:
-            self.doc.saveas(self.dxf_path)
+            self.save_current_dxf()
         if not getattr(self, "suppress_project_config_save", False):
             self.save_project_config()
         if should_record:
@@ -19592,7 +19699,7 @@ class MiniCAD(QMainWindow):
         self.parametric_groups = copy.deepcopy(snapshot["parametric_groups"])
         self.project_meta = copy.deepcopy(snapshot["project_meta"])
         self.block_keep_state = copy.deepcopy(snapshot["block_keep_state"])
-        self.doc.saveas(self.dxf_path)
+        self.save_current_dxf()
         self.save_project_config()
         self.save_original_geometries()
         self.update_dimension_inputs_from_meta()
@@ -20014,7 +20121,8 @@ class MiniCAD(QMainWindow):
 
     def reload_after_history_change(self):
         self.is_loading_history = True
-        self.doc = ezdxf.readfile(self.dxf_path)
+        if not self.is_db_file_open():
+            self.doc = ezdxf.readfile(self.dxf_path)
         self.save_original_geometries()
         self.update_dimension_inputs_from_meta()
         self.load_groups_into_list()
@@ -20029,6 +20137,10 @@ class MiniCAD(QMainWindow):
 
         current_item = None
         for model in models:
+            selected_model_id = getattr(self, "selected_db_model_id", None)
+            if selected_model_id is not None and model.get("id") != selected_model_id:
+                continue
+
             model_name = model.get("model_name") or f"Model {model.get('id')}"
             width = model.get("source_width")
             height = model.get("source_height")
@@ -20051,6 +20163,9 @@ class MiniCAD(QMainWindow):
 
             if model.get("id") == self.current_door_model_id:
                 model_item.setExpanded(True)
+
+        if self.file_explorer_list.topLevelItemCount() == 0:
+            return False
 
         if current_item is not None:
             parent = current_item.parent()
@@ -20125,6 +20240,7 @@ class MiniCAD(QMainWindow):
         self.parametric_groups.clear()
         base_file_name = selected_items[0].data(0, Qt.ItemDataRole.UserRole)
         self.current_project_file_id = None
+        self.current_db_file_name = None
         self.dxf_path = os.path.join(self.project_dir, base_file_name)
         self.doc = ezdxf.readfile(self.dxf_path)
 
@@ -20446,3 +20562,4 @@ if __name__ == "__main__":
     window.view.fitInView(window.scene.itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
     window.show()
     sys.exit(app.exec())
+

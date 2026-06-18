@@ -3058,6 +3058,8 @@ class ParametricDb:
         project_meta: Dict[str, Any],
         user_id: int,
         door_model_id: Optional[int] = None,
+        dxf_bytes: Optional[bytes] = None,
+        file_name_override: Optional[str] = None,
     ) -> Optional[int]:
         """
         Реєструє папку як DoorModel та всі DXF-файли всередині.
@@ -3549,13 +3551,14 @@ class ParametricDb:
         Спільні параметри моделі пишуться в DoorModels.
         TargetWidth/TargetHeight не пишуться в ProjectFiles як постійний стан.
         """
-        if not os.path.exists(dxf_path):
+        if dxf_bytes is None and not os.path.exists(dxf_path):
             self.last_error = f"DXF не знайдено: {dxf_path}"
             return None
 
         try:
             project_dir = os.path.abspath(project_dir)
-            dxf_path = os.path.abspath(dxf_path)
+            if dxf_bytes is None:
+                dxf_path = os.path.abspath(dxf_path)
             axis_link_mode = self.normalize_axis_link_mode(
                 project_meta.get("axis_link_mode"),
                 project_meta.get("link_x"),
@@ -3584,10 +3587,13 @@ class ParametricDb:
 
             self.update_door_model_from_meta(door_model_id, project_meta, user_id)
 
-            with open(dxf_path, "rb") as f:
-                file_data = f.read()
+            if dxf_bytes is None:
+                with open(dxf_path, "rb") as f:
+                    file_data = f.read()
+            else:
+                file_data = bytes(dxf_bytes)
 
-            file_name = os.path.basename(dxf_path)
+            file_name = file_name_override or os.path.basename(dxf_path)
             ext = os.path.splitext(file_name)[1] or ".dxf"
             text = project_meta.get("door_text") or {}
 
@@ -4124,6 +4130,24 @@ class ParametricDb:
         except Exception as exc:
             self.last_error = str(exc)
             return None
+
+    def update_project_file_binary(self, project_file_id: int, file_data: bytes) -> bool:
+        try:
+            with self.connect() as conn:
+                conn.cursor().execute(
+                    """
+                    UPDATE dbo.ProjectFiles
+                    SET FileData = ?, UpdatedAt = SYSDATETIME()
+                    WHERE Id = ?
+                    """,
+                    pyodbc.Binary(bytes(file_data)),
+                    project_file_id,
+                )
+                conn.commit()
+            return True
+        except Exception as exc:
+            self.last_error = str(exc)
+            return False
 
     # ============================================================
     # EXPORTS / JSON BACKUP
