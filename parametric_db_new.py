@@ -3558,8 +3558,8 @@ class ParametricDb:
             return None
 
         try:
-            project_dir = os.path.abspath(project_dir)
             if dxf_bytes is None:
+                project_dir = os.path.abspath(project_dir)
                 dxf_path = os.path.abspath(dxf_path)
             axis_link_mode = self.normalize_axis_link_mode(
                 project_meta.get("axis_link_mode"),
@@ -4217,6 +4217,69 @@ class ParametricDb:
                     door_model_id,
                     os.path.basename(export_path),
                     pyodbc.Binary(file_data),
+                    width,
+                    height,
+                    opening,
+                    user_id,
+                )
+                conn.commit()
+
+            return True
+
+        except Exception as exc:
+            self.last_error = str(exc)
+            return False
+
+    def save_export_file_bytes(
+        self,
+        source_project_file_id: int,
+        export_file_name: str,
+        file_data: bytes,
+        width: float,
+        height: float,
+        opening: str,
+        user_id: int,
+        door_model_id: Optional[int] = None,
+    ) -> bool:
+        try:
+            if not file_data:
+                self.last_error = "Export DXF bytes are empty."
+                return False
+
+            if door_model_id is None:
+                with self.connect() as conn:
+                    cur = conn.cursor()
+                    door_model_id = self._scalar(
+                        cur,
+                        """
+                        SELECT DoorModelId
+                        FROM dbo.ProjectFiles
+                        WHERE Id = ?
+                        """,
+                        source_project_file_id,
+                    )
+
+            with self.connect() as conn:
+                conn.cursor().execute(
+                    """
+                    INSERT INTO dbo.ProjectExports
+                    (
+                        SourceProjectFileId,
+                        DoorModelId,
+                        ExportFileName,
+                        ExportFileData,
+                        ExportWidth,
+                        ExportHeight,
+                        ExportDoorOpening,
+                        CreatedByUserId,
+                        CreatedAt
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, SYSDATETIME())
+                    """,
+                    source_project_file_id,
+                    door_model_id,
+                    export_file_name,
+                    pyodbc.Binary(bytes(file_data)),
                     width,
                     height,
                     opening,

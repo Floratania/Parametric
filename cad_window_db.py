@@ -13867,6 +13867,8 @@ class MiniCAD(QMainWindow):
         """One folder = one DoorModel. Register all DXF files in this folder under the same model."""
         if not getattr(self, "db", None) or not self.current_user_id():
             return None
+        if self.is_db_uri(getattr(self, "project_dir", "")):
+            return getattr(self, "current_door_model_id", None)
 
         try:
             door_model_id = self.db.register_folder_dxf_files(
@@ -13903,6 +13905,25 @@ class MiniCAD(QMainWindow):
         self.db.save_export_file(
             self.current_project_file_id,
             export_path,
+            self.project_meta.get("target_width"),
+            self.project_meta.get("target_height"),
+            self.export_target_opening(),
+            self.current_user_id(),
+            getattr(self, "current_door_model_id", None),
+        )
+
+    def save_export_doc_to_db(self, export_doc, export_file_name):
+        if not getattr(self, "db", None) or not self.current_user_id():
+            return False
+        if not getattr(self, "current_project_file_id", None):
+            self.save_current_project_to_db("BeforeExport")
+        if not getattr(self, "current_project_file_id", None):
+            return False
+
+        return self.db.save_export_file_bytes(
+            self.current_project_file_id,
+            export_file_name,
+            self.dxf_doc_to_bytes(export_doc),
             self.project_meta.get("target_width"),
             self.project_meta.get("target_height"),
             self.export_target_opening(),
@@ -13970,7 +13991,7 @@ class MiniCAD(QMainWindow):
                     dxf_path=self.dxf_path,
                     project_file_id=getattr(self, "current_project_file_id", None),
                     door_model_id=getattr(self, "current_door_model_id", None),
-                    file_name=os.path.basename(self.dxf_path),
+                    file_name=self.current_dxf_file_name(),
                 )
 
             if not loaded and getattr(self, "current_door_model_id", None):
@@ -14166,8 +14187,24 @@ class MiniCAD(QMainWindow):
     def db_opening_enabled(self):
         return bool(getattr(self, "db", None) and getattr(self.db, "available", False))
 
+    def is_db_uri(self, value):
+        return str(value or "").startswith("db://")
+
     def is_db_file_open(self):
-        return bool(getattr(self, "current_project_file_id", None) and str(getattr(self, "dxf_path", "")).startswith("db://"))
+        return bool(getattr(self, "current_project_file_id", None) and self.is_db_uri(getattr(self, "dxf_path", "")))
+
+    def current_dxf_file_name(self):
+        if self.is_db_file_open():
+            return getattr(self, "current_db_file_name", None) or f"project_file_{self.current_project_file_id}.dxf"
+        return os.path.basename(self.dxf_path)
+
+    def current_dxf_bytes(self):
+        if self.is_db_file_open():
+            return self.dxf_doc_to_bytes()
+        if os.path.exists(self.dxf_path):
+            with open(self.dxf_path, "rb") as f:
+                return f.read()
+        return None
 
     def read_dxf_doc_from_bytes(self, data):
         if isinstance(data, memoryview):
@@ -16332,12 +16369,16 @@ class MiniCAD(QMainWindow):
         os.makedirs(output_dir, exist_ok=True)
         return output_dir
 
-    def build_export_path(self, target_w, target_h):
-        base_name = os.path.splitext(os.path.basename(self.dxf_path))[0]
+    def build_export_file_name(self, target_w, target_h):
+        base_name = os.path.splitext(self.current_dxf_file_name())[0]
         base_name = re.sub(r"(?<!\d)\d{3,5}_\d{3,5}(?!\d)", "", base_name).strip("_- ")
         width_part = self.sanitize_filename_part(target_w)
         height_part = self.sanitize_filename_part(target_h)
-        name = f"{base_name}_{width_part}_{height_part}.DXF"
+        return f"{base_name}_{width_part}_{height_part}.DXF"
+
+    def build_export_path(self, target_w, target_h):
+        name = self.build_export_file_name(target_w, target_h)
+        base_name = os.path.splitext(name)[0]
         output_dir = self.get_export_output_dir(target_w, target_h)
         path = os.path.join(output_dir, name)
         counter = 2
@@ -16409,6 +16450,18 @@ class MiniCAD(QMainWindow):
             self.lbl_status_calc.setText("<font color='#4fc3f7'>Перегляд застосовано тільки на екрані. Файл ще не збережено.</font>")
 
     def restore_current_dxf_from_disk(self):
+        if self.is_db_file_open():
+            data = self.db.get_project_file_binary(self.current_project_file_id)
+            if not data:
+                return
+            self.record_action_snapshot()
+            self.doc = self.read_dxf_doc_from_bytes(data)
+            self.save_original_geometries()
+            self.update_dimension_inputs_from_meta()
+            self.update_viewer()
+            self.load_entities_into_list()
+            self.lbl_status_calc.setText("<font color='#a5d6a7'>Повернуто стан з DXF у БД.</font>")
+            return
         if not os.path.exists(self.dxf_path):
             return
         self.record_action_snapshot()
@@ -16423,7 +16476,8 @@ class MiniCAD(QMainWindow):
         self.collect_text_settings_from_inputs()
         original_dxf_path = self.dxf_path
         original_bytes = None
-        if os.path.exists(self.dxf_path):
+        original_doc = copy.deepcopy(self.doc) if self.is_db_file_open() else None
+        if not self.is_db_file_open() and os.path.exists(self.dxf_path):
             with open(self.dxf_path, "rb") as f:
                 original_bytes = f.read()
         original_meta = copy.deepcopy(self.project_meta)
@@ -16442,6 +16496,10 @@ class MiniCAD(QMainWindow):
             self.suppress_project_config_save = False
             self.is_loading_history = False
         if not ok_to_export:
+            if original_doc is not None:
+                self.doc = original_doc
+                self.save_current_dxf()
+                self.save_original_geometries()
             if original_bytes is not None:
                 with open(self.dxf_path, "wb") as f:
                     f.write(original_bytes)
@@ -16458,7 +16516,6 @@ class MiniCAD(QMainWindow):
 
         target_w = self.project_meta.get("target_width")
         target_h = self.project_meta.get("target_height")
-        export_path = self.build_export_path(target_w, target_h)
 
         export_doc = copy.deepcopy(self.doc)
         export_msp = export_doc.modelspace()
@@ -16472,13 +16529,21 @@ class MiniCAD(QMainWindow):
                 export_msp.delete_entity(export_doc.entitydb[hndl])
 
         self.apply_opening_to_export_doc(export_doc)
-        export_doc.saveas(export_path)
-        self.save_generated_project_config(export_path, target_w, target_h)
-        self.save_export_to_db(export_path)
+        if self.is_db_file_open():
+            export_name = self.build_export_file_name(target_w, target_h)
+            self.save_export_doc_to_db(export_doc, export_name)
+        else:
+            export_path = self.build_export_path(target_w, target_h)
+            export_doc.saveas(export_path)
+            self.save_generated_project_config(export_path, target_w, target_h)
+            self.save_export_to_db(export_path)
         if original_bytes is not None:
             with open(self.dxf_path, "wb") as f:
                 f.write(original_bytes)
             self.doc = ezdxf.readfile(self.dxf_path)
+        elif original_doc is not None:
+            self.doc = original_doc
+            self.save_current_dxf()
         self.project_meta = original_meta
         self.parametric_groups = original_groups
         self.block_keep_state = original_keep_state
@@ -16489,7 +16554,8 @@ class MiniCAD(QMainWindow):
         self.load_groups_into_list()
         self.load_entities_into_list()
         self.update_viewer()
-        self.lbl_status_calc.setText(f"<font color='#a5d6a7'>Створено: {os.path.basename(export_path)}</font>")
+        created_name = export_name if self.is_db_file_open() else os.path.basename(export_path)
+        self.lbl_status_calc.setText(f"<font color='#a5d6a7'>Створено: {created_name}</font>")
 
     def export_model_dxf_with_dimensions(self):
         """Export all source DXF files from the current folder/model with the same target size."""
@@ -20198,6 +20264,8 @@ class MiniCAD(QMainWindow):
         return True
 
     def populate_local_file_tree(self):
+        if self.is_db_uri(getattr(self, "project_dir", "")):
+            return False
         files = os.listdir(self.project_dir)
         dxf_files = [f for f in files if f.lower().endswith('.dxf')]
         for file_name in dxf_files:
