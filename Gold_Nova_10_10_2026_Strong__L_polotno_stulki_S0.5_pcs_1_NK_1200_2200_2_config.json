@@ -2,11 +2,14 @@
     "meta": {
         "source_width": 2040.0,
         "source_height": 860.0,
-        "target_width": 2060.000000000001,
+        "target_width": 2060.0,
         "target_height": 200.0,
         "keep_blocks": [],
         "delete_blocks": [],
         "door_opening": "left",
+        "source_door_opening": "left",
+        "target_door_opening": "left",
+        "growth_axis": "both",
         "door_text": {
             "enabled": false,
             "text": "",

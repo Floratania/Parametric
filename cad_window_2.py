@@ -25,6 +25,14 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QColor, QBrush, QPen, QPainterPath, QPainter, QGuiApplication
 
+from designer_shell import create_fallback_shell, load_designer_shell
+
+try:
+    from parametric_db import LoginDialog, ParametricDb
+except ImportError:
+    LoginDialog = None
+    ParametricDb = None
+
 
 try:
     from graphics_items import SelectableCircle, SelectableLine, SelectableArc
@@ -221,6 +229,11 @@ class MiniCAD(QMainWindow):
         self.project_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in locals() else os.getcwd()
         self.dxf_path = os.path.join(self.project_dir, "drawing.DXF")
         self.debug_output = False
+        self.db = ParametricDb() if ParametricDb is not None else None
+        self.current_user = None
+        self.current_project_file_id = None
+        self.current_door_model_id = None
+        self.db_cache_dir = os.path.join(self.project_dir, "_db_cache")
         self.current_theme = "Темна"
 
         self.selected_handles = set()
@@ -266,6 +279,7 @@ class MiniCAD(QMainWindow):
         self.load_doc_safely()
         self.load_folder_config()
         self.load_project_config()
+        self.authenticate_user()
         
         self.history = HistoryManager(self.dxf_path)
         self.history.save_state()
@@ -527,13 +541,74 @@ class MiniCAD(QMainWindow):
         try:
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4, ensure_ascii=False)
+            self.save_project_config_to_db(config_path)
         except Exception as e:
             print(f"Помилка збереження конфігурації JSON: {e}")
 
+    def save_project_config_to_db(self, config_path):
+        if not self.db_save_enabled():
+            return
+        if not hasattr(self.db, "save_project_snapshot"):
+            return
+        try:
+            self.db.save_project_snapshot(
+                self.project_dir,
+                self.dxf_path,
+                config_path,
+                self.project_meta,
+                self.parametric_groups,
+                self.current_user.get("id"),
+                "Saved",
+            )
+        except Exception as exc:
+            if hasattr(self.db, "last_error"):
+                self.db.last_error = str(exc)
+
+    def authenticate_user(self):
+        if self.db is None or not getattr(self.db, "available", False) or LoginDialog is None:
+            return
+        dialog = LoginDialog(self, "Login to open files from DB.")
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+        username, password = dialog.credentials()
+        try:
+            self.current_user = self.db.authenticate(username, password)
+        except Exception as exc:
+            self.current_user = None
+            if hasattr(self.db, "last_error"):
+                self.db.last_error = str(exc)
+        if self.current_user is None:
+            QMessageBox.warning(self, "DB", "Authorization failed. Local mode is still available.")
+
+    def load_ui_shell(self):
+        ui_path = os.path.join(self.project_dir, "ui", "main_window.ui")
+        shell = load_designer_shell(self, ui_path)
+        if shell:
+            self.setCentralWidget(shell["widget"])
+            self._designer_shell = shell
+            self.central_layout = None
+            return
+        self._designer_shell = create_fallback_shell(self)
+        self.central_layout = self._designer_shell["central"]
+
+    def add_main_panel(self, widget, area, stretch=0):
+        shell_layout = getattr(self, "_designer_shell", {}).get(area)
+        if shell_layout is not None:
+            shell_layout.addWidget(widget)
+            return
+        self.central_layout.addWidget(widget, stretch=stretch)
+
+    def db_opening_enabled(self):
+        return (
+            self.db is not None
+            and getattr(self.db, "available", False)
+        )
+
+    def db_save_enabled(self):
+        return self.db_opening_enabled() and self.current_user is not None
+
     def init_ui(self):
-        main_widget = QWidget()
-        self.central_layout = QHBoxLayout(main_widget)
-        self.setCentralWidget(main_widget)
+        self.load_ui_shell()
 
         folder_explorer_widget = QWidget()
         folder_explorer_layout = QVBoxLayout(folder_explorer_widget)
@@ -547,19 +622,24 @@ class MiniCAD(QMainWindow):
         self.btn_open_file.setStyleSheet("background-color: #37474f; color: white; font-weight: bold; padding: 4px;")
         self.btn_open_file.clicked.connect(self.open_dxf_from_dialog)
         folder_explorer_layout.addWidget(self.btn_open_file)
+
+        self.btn_open_db_file = QPushButton("DB Відкрити з БД")
+        self.btn_open_db_file.setStyleSheet("background-color: #455a64; color: white; font-weight: bold; padding: 4px;")
+        self.btn_open_db_file.clicked.connect(self.open_dxf_from_db_picker)
+        folder_explorer_layout.addWidget(self.btn_open_db_file)
         
         self.file_explorer_list = QListWidget()
         self.file_explorer_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.file_explorer_list.itemSelectionChanged.connect(self.on_dxf_selection_changed_in_explorer)
         folder_explorer_layout.addWidget(self.file_explorer_list)
-        self.central_layout.addWidget(folder_explorer_widget, stretch=1)
+        self.add_main_panel(folder_explorer_widget, "folder", stretch=1)
 
         self.scene = QGraphicsScene()
         self.view = AdvancedGraphicsView(self.scene, self)
         self.view.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.view.setMouseTracking(True)  
         self.scene.mouseMoveEvent = self.on_scene_mouse_move
-        self.central_layout.addWidget(self.view, stretch=5)
+        self.add_main_panel(self.view, "view", stretch=5)
         self.view.setDragMode(QGraphicsView.DragMode.RubberBandDrag) 
 
         self.scroll_area = QScrollArea()
@@ -570,7 +650,7 @@ class MiniCAD(QMainWindow):
         control_panel_layout = QVBoxLayout(control_panel)
         control_panel_layout.setContentsMargins(5, 5, 5, 5)
         self.scroll_area.setWidget(control_panel)
-        self.central_layout.addWidget(self.scroll_area, stretch=4)
+        self.add_main_panel(self.scroll_area, "side", stretch=4)
 
         inspector_group = QGroupBox("")
         inspector_box = QVBoxLayout()
@@ -2657,6 +2737,10 @@ class MiniCAD(QMainWindow):
         return delete_handles
 
     def open_dxf_from_dialog(self):
+        if self.db_opening_enabled():
+            self.open_dxf_from_db_picker()
+            return
+
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Виберіть DXF файл",
@@ -2697,6 +2781,152 @@ class MiniCAD(QMainWindow):
                 
             except Exception as e:
                 print(f"Помилка при відкритті файлу: {e}")
+
+    def open_dxf_from_path(self, file_path, refresh_file_list=True):
+        self.project_dir = os.path.dirname(os.path.abspath(file_path))
+        self.dxf_path = os.path.abspath(file_path)
+        self.doc = ezdxf.readfile(self.dxf_path)
+        self.current_project_file_id = None
+        self.current_door_model_id = None
+
+        self.selected_handles.clear()
+        self.parametric_groups.clear()
+        self.zones_undo_stack.clear()
+        self.zones_redo_stack.clear()
+        self.global_recalc_undo_stack.clear()
+        self.global_recalc_redo_stack.clear()
+
+        self.load_folder_config()
+        self.load_project_config()
+        self.prompt_source_dimensions_on_open()
+        self.update_dimension_inputs_from_meta()
+
+        self.history = HistoryManager(self.dxf_path)
+        self.history.save_state()
+        self.save_zones_history_state()
+        self.save_original_geometries()
+
+        if refresh_file_list:
+            self.scan_project_folder_for_dxf()
+        self.update_viewer()
+        self.load_entities_into_list()
+        self.load_groups_into_list()
+        self.load_block_filter_list()
+        self.update_history_buttons_state()
+
+    def apply_db_config(self, config):
+        if not config:
+            return
+        self.current_project_file_id = config.get("project_file_id")
+        self.current_door_model_id = config.get("door_model_id")
+        self.project_meta = self.default_project_meta()
+        self.project_meta.update(config.get("meta") or {})
+        text_settings = self.default_text_settings()
+        text_settings.update(self.project_meta.get("door_text", {}))
+        self.project_meta["door_text"] = text_settings
+        self.parametric_groups = config.get("groups") or []
+        for group in self.parametric_groups:
+            group["handles"] = set(group.get("handles", []))
+            self.get_group_key(group)
+            self.apply_growth_axis_to_group(group)
+        self.block_keep_state = config.get("block_keep_state") or {}
+
+    def open_dxf_from_db_picker(self):
+        if not self.db_opening_enabled():
+            error = getattr(self.db, "last_error", "") if self.db is not None else ""
+            QMessageBox.warning(self, "DB", f"DB is not available.{chr(10) + error if error else ''}")
+            return
+
+        records = self.db.list_project_files()
+        if not records:
+            error = getattr(self.db, "last_error", "")
+            QMessageBox.information(self, "DB", f"No uploaded DXF files found in DB.{chr(10) + error if error else ''}")
+            return
+
+        labels = []
+        by_label = {}
+        for record in records:
+            file_name = record.get("file_name") or f"DB file {record.get('id')}"
+            source = record.get("source") or "DB"
+            status = record.get("status") or ""
+            label = f"{record.get('id')} | {file_name} | {source} {status}".strip()
+            labels.append(label)
+            by_label[label] = record
+
+        label, ok = QInputDialog.getItem(
+            self,
+            "Open from DB",
+            "Choose uploaded DXF:",
+            labels,
+            0,
+            False,
+        )
+        if not ok or not label:
+            return
+
+        self.open_dxf_from_db_record(by_label[label])
+
+    def open_dxf_from_db_record(self, record):
+        if self.db is None:
+            return False
+        try:
+            if record.get("source") == "ProcessedFiles":
+                file_path = record.get("file_path")
+                if not file_path or not os.path.exists(file_path):
+                    QMessageBox.warning(self, "DB", "DB record has no available local DXF path.")
+                    return False
+                self.open_dxf_from_path(file_path, refresh_file_list=False)
+                self.current_project_file_id = record.get("id")
+                return True
+
+            file_name = record.get("file_name") or f"project_file_{record.get('id')}.dxf"
+            if not file_name.lower().endswith(".dxf"):
+                file_name = f"{file_name}.dxf"
+
+            data = self.db.get_project_file_binary(record.get("id"))
+            if not data:
+                QMessageBox.warning(self, "DB", "DXF binary data was not found for this DB file.")
+                return False
+
+            os.makedirs(self.db_cache_dir, exist_ok=True)
+            safe_name = re.sub(r"[^0-9A-Za-zА-Яа-я_. -]+", "_", file_name)
+            cached_path = os.path.join(self.db_cache_dir, f"{record.get('id')}_{safe_name}")
+            with open(cached_path, "wb") as f:
+                f.write(data)
+
+            self.project_dir = os.path.dirname(os.path.abspath(cached_path))
+            self.dxf_path = os.path.abspath(cached_path)
+            self.doc = ezdxf.readfile(self.dxf_path)
+
+            self.selected_handles.clear()
+            self.parametric_groups.clear()
+            self.zones_undo_stack.clear()
+            self.zones_redo_stack.clear()
+            self.global_recalc_undo_stack.clear()
+            self.global_recalc_redo_stack.clear()
+
+            db_config = self.db.load_project_config_from_db(record.get("id"))
+            if db_config:
+                self.apply_db_config(db_config)
+            else:
+                self.load_folder_config()
+                self.load_project_config()
+            self.prompt_source_dimensions_on_open()
+            self.update_dimension_inputs_from_meta()
+
+            self.history = HistoryManager(self.dxf_path)
+            self.history.save_state()
+            self.save_zones_history_state()
+            self.save_original_geometries()
+            self.update_viewer()
+            self.load_entities_into_list()
+            self.load_groups_into_list()
+            self.load_block_filter_list()
+            self.update_history_buttons_state()
+            return True
+        except Exception as exc:
+            QMessageBox.warning(self, "DB", f"Could not open DXF from DB: {exc}")
+            return False
 
     def transform_selected_entities(self, mode):
         if not self.selected_handles: return
@@ -5435,6 +5665,21 @@ class MiniCAD(QMainWindow):
         self.file_explorer_list.blockSignals(True)
         self.file_explorer_list.clear()
         try:
+            if self.db_opening_enabled():
+                db_files = self.db.list_project_files()
+                if db_files:
+                    for record in db_files:
+                        file_name = record.get("file_name") or f"DB file {record.get('id')}"
+                        status = record.get("status") or ""
+                        prefix = "DB"
+                        item = QListWidgetItem(f"{prefix} {file_name} {status}".strip())
+                        item.setData(Qt.ItemDataRole.UserRole, record)
+                        self.file_explorer_list.addItem(item)
+                        if record.get("id") == self.current_project_file_id:
+                            self.file_explorer_list.setCurrentItem(item)
+                    self.file_explorer_list.blockSignals(False)
+                    return
+
             files = os.listdir(self.project_dir)
             dxf_files = [f for f in files if f.lower().endswith('.dxf')]
             for file_name in dxf_files:
@@ -5450,6 +5695,10 @@ class MiniCAD(QMainWindow):
     def on_dxf_selection_changed_in_explorer(self):
         selected_items = self.file_explorer_list.selectedItems()
         if not selected_items: return
+        first_data = selected_items[0].data(Qt.ItemDataRole.UserRole)
+        if isinstance(first_data, dict):
+            self.open_dxf_from_db_record(first_data)
+            return
         self.selected_handles.clear()
         self.parametric_groups.clear()
         base_file_name = selected_items[0].data(Qt.ItemDataRole.UserRole)

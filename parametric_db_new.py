@@ -2913,7 +2913,10 @@ import json
 import hashlib
 from typing import Any, Dict, List, Optional
 
-import pyodbc
+try:
+    import pyodbc
+except ImportError:
+    pyodbc = None
 from PySide6.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -2958,12 +2961,14 @@ class LoginDialog(QDialog):
 
 
 def get_sql_driver() -> str:
+    if pyodbc is None:
+        return "SQL Server"
     drivers = [d for d in pyodbc.drivers()]
     preferred = [
+        "SQL Server",
         "ODBC Driver 18 for SQL Server",
         "ODBC Driver 17 for SQL Server",
         "SQL Server Native Client 11.0",
-        "SQL Server",
     ]
 
     for name in preferred:
@@ -3012,6 +3017,8 @@ class ParametricDb:
         return base + f"UID={self.username};PWD={self.password};"
 
     def connect(self):
+        if pyodbc is None:
+            raise RuntimeError("pyodbc не встановлено")
         return pyodbc.connect(self.connection_string(), autocommit=False)
 
     def _check_connection(self) -> bool:
@@ -4006,6 +4013,45 @@ class ParametricDb:
                         "updated_at": r.UpdatedAt,
                     }
                     for r in rows
+                ]
+        except Exception as exc:
+            self.last_error = str(exc)
+            return []
+
+    def list_project_files(self, limit: int = 300) -> List[Dict[str, Any]]:
+        try:
+            with self.connect() as conn:
+                rows = conn.cursor().execute(
+                    f"""
+                    SELECT TOP ({int(limit)})
+                        Id,
+                        FileName,
+                        FileExtension,
+                        DoorModelId,
+                        Status,
+                        CreatedAt,
+                        UpdatedAt,
+                        CASE WHEN FileData IS NULL THEN 0 ELSE 1 END AS HasFileData
+                    FROM dbo.ProjectFiles
+                    WHERE LOWER(ISNULL(FileExtension, N'.dxf')) LIKE N'%dxf%'
+                       OR LOWER(ISNULL(FileName, N'')) LIKE N'%.dxf'
+                    ORDER BY COALESCE(UpdatedAt, CreatedAt) DESC, FileName
+                    """
+                ).fetchall()
+
+                return [
+                    {
+                        "source": "ProjectFiles",
+                        "id": int(row.Id),
+                        "file_name": row.FileName,
+                        "extension": row.FileExtension,
+                        "door_model_id": int(row.DoorModelId) if row.DoorModelId else None,
+                        "status": row.Status,
+                        "created_at": row.CreatedAt,
+                        "updated_at": row.UpdatedAt,
+                        "has_file_data": bool(row.HasFileData),
+                    }
+                    for row in rows
                 ]
         except Exception as exc:
             self.last_error = str(exc)

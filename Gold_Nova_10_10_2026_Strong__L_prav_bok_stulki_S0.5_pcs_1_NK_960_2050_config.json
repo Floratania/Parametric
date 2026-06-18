@@ -7,7 +7,10 @@
         "keep_blocks": [],
         "delete_blocks": [],
         "door_opening": "left",
+        "source_door_opening": "left",
+        "target_door_opening": "left",
         "growth_axis": "both",
+        "axis_link_mode": "normal",
         "door_text": {
             "enabled": false,
             "text": "",

@@ -362,6 +362,213 @@ class ParametricDb:
             *values,
         )
 
+    def table_exists(self, cur, table_name):
+        row = cur.execute("SELECT OBJECT_ID(?, N'U')", f"dbo.{table_name}").fetchone()
+        return bool(row and row[0])
+
+    def list_project_files(self, limit=300):
+        if not self.available:
+            return []
+        try:
+            with self.connect() as conn:
+                cur = conn.cursor()
+                if self.table_exists(cur, "ProjectFiles"):
+                    rows = cur.execute(
+                        f"""
+                        SELECT TOP ({int(limit)})
+                            Id, FileName, FileExtension, DoorModelId, Status, CreatedAt, UpdatedAt
+                        FROM dbo.ProjectFiles
+                        WHERE LOWER(ISNULL(FileExtension, N'.dxf')) LIKE N'%dxf%'
+                           OR LOWER(ISNULL(FileName, N'')) LIKE N'%.dxf'
+                        ORDER BY COALESCE(UpdatedAt, CreatedAt) DESC, FileName
+                        """
+                    ).fetchall()
+                    return [
+                        {
+                            "source": "ProjectFiles",
+                            "id": int(row.Id),
+                            "file_name": row.FileName,
+                            "extension": row.FileExtension,
+                            "door_model_id": int(row.DoorModelId) if row.DoorModelId else None,
+                            "status": row.Status,
+                            "created_at": row.CreatedAt,
+                            "updated_at": row.UpdatedAt,
+                        }
+                        for row in rows
+                    ]
+
+                if self.table_exists(cur, "ProcessedFiles"):
+                    rows = cur.execute(
+                        f"""
+                        SELECT TOP ({int(limit)})
+                            Id, FilePath, FileName, ConfigJsonPath, Status, ProcessedAt, CreatedAt
+                        FROM dbo.ProcessedFiles
+                        WHERE LOWER(ISNULL(FileName, N'')) LIKE N'%.dxf'
+                           OR LOWER(ISNULL(FilePath, N'')) LIKE N'%.dxf'
+                        ORDER BY COALESCE(ProcessedAt, CreatedAt) DESC, FileName
+                        """
+                    ).fetchall()
+                    return [
+                        {
+                            "source": "ProcessedFiles",
+                            "id": int(row.Id),
+                            "file_name": row.FileName,
+                            "file_path": row.FilePath,
+                            "config_json_path": row.ConfigJsonPath,
+                            "status": row.Status,
+                            "created_at": row.CreatedAt,
+                            "updated_at": row.ProcessedAt,
+                        }
+                        for row in rows
+                    ]
+        except Exception as exc:
+            self.last_error = str(exc)
+        return []
+
+    def get_project_file_binary(self, project_file_id):
+        if not self.available:
+            return None
+        try:
+            with self.connect() as conn:
+                cur = conn.cursor()
+                if not self.table_exists(cur, "ProjectFiles"):
+                    return None
+                row = cur.execute(
+                    "SELECT FileData FROM dbo.ProjectFiles WHERE Id = ?",
+                    project_file_id,
+                ).fetchone()
+                return bytes(row.FileData) if row and row.FileData is not None else None
+        except Exception as exc:
+            self.last_error = str(exc)
+            return None
+
+    def load_project_config_from_db(self, project_file_id):
+        if not self.available:
+            return None
+        try:
+            with self.connect() as conn:
+                cur = conn.cursor()
+                if not all(
+                    self.table_exists(cur, table)
+                    for table in ("ProjectFiles", "ProjectGroups", "ProjectGroupEntities")
+                ):
+                    return None
+
+                file_row = cur.execute(
+                    "SELECT * FROM dbo.ProjectFiles WHERE Id = ?",
+                    project_file_id,
+                ).fetchone()
+                if not file_row:
+                    return None
+
+                model_row = None
+                if getattr(file_row, "DoorModelId", None) and self.table_exists(cur, "DoorModels"):
+                    model_row = cur.execute(
+                        "SELECT * FROM dbo.DoorModels WHERE Id = ?",
+                        file_row.DoorModelId,
+                    ).fetchone()
+
+                def as_float(value):
+                    return None if value is None else float(value)
+
+                source_width = as_float(getattr(model_row, "SourceWidth", None)) if model_row else as_float(getattr(file_row, "SourceWidth", None))
+                source_height = as_float(getattr(model_row, "SourceHeight", None)) if model_row else as_float(getattr(file_row, "SourceHeight", None))
+                source_opening = (
+                    getattr(model_row, "SourceDoorOpening", None) if model_row else None
+                ) or getattr(file_row, "SourceDoorOpening", None) or "left"
+                current_opening = getattr(file_row, "CurrentDoorOpening", None) or source_opening
+
+                meta = {
+                    "source_width": source_width,
+                    "source_height": source_height,
+                    "target_width": source_width,
+                    "target_height": source_height,
+                    "door_opening": current_opening,
+                    "source_door_opening": source_opening,
+                    "target_door_opening": current_opening,
+                    "growth_axis": getattr(file_row, "GrowthAxis", None) or "both",
+                    "axis_link_mode": getattr(file_row, "AxisLinkMode", None) or "normal",
+                    "door_text": {
+                        "enabled": False,
+                        "text": "",
+                        "x": 0.0,
+                        "y": 0.0,
+                        "height": 30.0,
+                        "width_factor": 120.0,
+                        "rotation": 0.0,
+                        "font": "STANDARD",
+                        "handle": None,
+                    },
+                }
+
+                if self.table_exists(cur, "ProjectTextSettings"):
+                    text_row = cur.execute(
+                        "SELECT * FROM dbo.ProjectTextSettings WHERE ProjectFileId = ?",
+                        project_file_id,
+                    ).fetchone()
+                    if text_row:
+                        meta["door_text"] = {
+                            "enabled": bool(getattr(text_row, "Enabled", False)),
+                            "text": getattr(text_row, "TextValue", None) or "",
+                            "x": as_float(getattr(text_row, "X", None)) or 0.0,
+                            "y": as_float(getattr(text_row, "Y", None)) or 0.0,
+                            "height": as_float(getattr(text_row, "Height", None)) or 30.0,
+                            "width_factor": as_float(getattr(text_row, "WidthFactor", None)) or 120.0,
+                            "rotation": as_float(getattr(text_row, "Rotation", None)) or 0.0,
+                            "font": getattr(text_row, "FontName", None) or "STANDARD",
+                            "handle": getattr(text_row, "EntityHandle", None),
+                        }
+
+                groups = []
+                block_keep_state = {}
+                group_rows = cur.execute(
+                    """
+                    SELECT *
+                    FROM dbo.ProjectGroups
+                    WHERE ProjectFileId = ?
+                    ORDER BY SortOrder, Id
+                    """,
+                    project_file_id,
+                ).fetchall()
+                for group_row in group_rows:
+                    handles = {
+                        row.EntityHandle
+                        for row in cur.execute(
+                            "SELECT EntityHandle FROM dbo.ProjectGroupEntities WHERE ProjectGroupId = ?",
+                            group_row.Id,
+                        ).fetchall()
+                    }
+                    uid = getattr(group_row, "Uid", None) or f"{group_row.Name}|{group_row.Id}"
+                    group = {
+                        "uid": uid,
+                        "name": group_row.Name,
+                        "handles": handles,
+                        "k_w": float(getattr(group_row, "K_W", 0) or 0),
+                        "k_h": float(getattr(group_row, "K_H", 0) or 0),
+                        "growth_p_w": float(getattr(group_row, "Growth_P_W", 0) or 0),
+                        "growth_p_h": float(getattr(group_row, "Growth_P_H", 0) or 0),
+                        "growth_dir_x": getattr(group_row, "Growth_Dir_X", None) or "Р¦РµРЅС‚СЂ",
+                        "growth_dir_y": getattr(group_row, "Growth_Dir_Y", None) or "Р¦РµРЅС‚СЂ",
+                        "shift_dir_x": getattr(group_row, "Shift_Dir_X", None) or "Р’РїСЂР°РІРѕ",
+                        "shift_dir_y": getattr(group_row, "Shift_Dir_Y", None) or "Р’РіРѕСЂСѓ",
+                        "link_x": getattr(group_row, "Link_X", None) or "X = W",
+                        "link_y": getattr(group_row, "Link_Y", None) or "Y = H",
+                        "resizes": bool(getattr(group_row, "Resizes", True)),
+                    }
+                    groups.append(group)
+                    block_keep_state[uid] = bool(getattr(group_row, "IsKeep", True))
+
+                return {
+                    "project_file_id": int(project_file_id),
+                    "door_model_id": int(file_row.DoorModelId) if getattr(file_row, "DoorModelId", None) else None,
+                    "meta": meta,
+                    "groups": groups,
+                    "block_keep_state": block_keep_state,
+                }
+        except Exception as exc:
+            self.last_error = str(exc)
+            return None
+
     def log_action(self, cur, user_id, action_type, entity_type, entity_id, file_path, folder_path, details):
         cur.execute(
             """

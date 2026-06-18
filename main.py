@@ -30,7 +30,7 @@ import sys
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
 
-from cad_window_2 import MiniCAD
+from cad_window_db import MiniCAD
 
 
 def main():
