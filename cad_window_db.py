@@ -13832,17 +13832,17 @@ class MiniCAD(QMainWindow):
         file_name_override = getattr(self, "current_db_file_name", None) if self.is_db_file_open() else None
 
         project_file_id = self.db.save_project_snapshot(
-            self.project_dir,
-            self.dxf_path,
-            self.project_meta,
-            self.parametric_groups,
-            self.block_keep_state,
-            self.current_user_id(),
-            status,
-            getattr(self, "current_project_file_id", None),
-            getattr(self, "current_door_model_id", None),
-            dxf_bytes,
-            file_name_override,
+            project_dir=self.project_dir,
+            dxf_path=self.dxf_path,
+            project_meta=self.project_meta,
+            parametric_groups=self.parametric_groups,
+            block_keep_state=self.block_keep_state,
+            user_id=self.current_user_id(),
+            status=status,
+            project_file_id=getattr(self, "current_project_file_id", None),
+            door_model_id=getattr(self, "current_door_model_id", None),
+            dxf_bytes=dxf_bytes,
+            file_name_override=file_name_override,
         )
 
         if project_file_id:

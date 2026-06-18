@@ -3544,6 +3544,8 @@ class ParametricDb:
         status: str = "ConfigSaved",
         project_file_id: Optional[int] = None,
         door_model_id: Optional[int] = None,
+        dxf_bytes: Optional[bytes] = None,
+        file_name_override: Optional[str] = None,
     ) -> Optional[int]:
         """
         Upsert поточного DXF + його групи.
