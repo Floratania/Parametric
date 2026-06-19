@@ -14287,7 +14287,7 @@ class MiniCAD(QMainWindow):
             return
         dxf_bytes = self.dxf_doc_to_bytes() if self.is_db_file_open() else None
         file_name_override = getattr(self, "current_db_file_name", None) if self.is_db_file_open() else None
-        folder_override = getattr(self, "current_db_file_folder", None) if self.is_db_file_open() else None
+        folder_override = self.current_dxf_folder_name()
 
         project_file_id = self.db.save_project_snapshot(
             project_dir=self.project_dir,
@@ -14310,6 +14310,7 @@ class MiniCAD(QMainWindow):
                 dxf_path=self.dxf_path,
                 project_file_id=project_file_id,
                 door_model_id=getattr(self, "current_door_model_id", None),
+                folder_name=folder_override,
             )
             if loaded and loaded.get("door_model_id"):
                 self.current_door_model_id = loaded.get("door_model_id")
@@ -14667,6 +14668,7 @@ class MiniCAD(QMainWindow):
                     project_file_id=getattr(self, "current_project_file_id", None),
                     door_model_id=getattr(self, "current_door_model_id", None),
                     file_name=self.current_dxf_file_name(),
+                    folder_name=self.current_dxf_folder_name(),
                 )
 
             if not loaded and getattr(self, "current_door_model_id", None):
@@ -14873,6 +14875,19 @@ class MiniCAD(QMainWindow):
             return getattr(self, "current_db_file_name", None) or f"project_file_{self.current_project_file_id}.dxf"
         return os.path.basename(self.dxf_path)
 
+    def current_dxf_folder_name(self):
+        if self.is_db_file_open():
+            return str(getattr(self, "current_db_file_folder", "") or "").replace("\\", "/").strip("/")
+        if self.is_db_uri(getattr(self, "project_dir", "")):
+            return ""
+        try:
+            folder = os.path.relpath(os.path.dirname(os.path.abspath(self.dxf_path)), os.path.abspath(self.project_dir))
+            if folder in ("", "."):
+                return ""
+            return folder.replace("\\", "/").strip("/")
+        except Exception:
+            return ""
+
     def current_dxf_bytes(self):
         if self.is_db_file_open():
             return self.dxf_doc_to_bytes()
@@ -14935,6 +14950,11 @@ class MiniCAD(QMainWindow):
         self.btn_open_file.setStyleSheet("background-color: #37474f; color: white; font-weight: bold; padding: 4px;")
         self.btn_open_file.clicked.connect(self.open_dxf_from_dialog)
         folder_explorer_layout.addWidget(self.btn_open_file)
+
+        self.btn_open_folder = QPushButton("📁 Відкрити папку...")
+        self.btn_open_folder.setStyleSheet("background-color: #37474f; color: white; font-weight: bold; padding: 4px;")
+        self.btn_open_folder.clicked.connect(self.open_folder_from_dialog)
+        folder_explorer_layout.addWidget(self.btn_open_folder)
 
         self.btn_open_db_file = QPushButton("DB Відкрити з БД")
         self.btn_open_db_file.setStyleSheet("background-color: #455a64; color: white; font-weight: bold; padding: 4px;")
@@ -17866,6 +17886,102 @@ class MiniCAD(QMainWindow):
                 "Відкриття DXF",
                 f"Помилка при відкритті файлу:\n{exc}"
             )
+
+    def open_folder_from_dialog(self):
+        folder_path = QFileDialog.getExistingDirectory(
+            self,
+            "Виберіть папку моделі дверей",
+            self.project_dir if not self.is_db_uri(getattr(self, "project_dir", "")) else os.getcwd(),
+        )
+        if not folder_path:
+            return
+
+        old_state = {
+            "project_dir": getattr(self, "project_dir", None),
+            "dxf_path": getattr(self, "dxf_path", None),
+            "doc": getattr(self, "doc", None),
+            "project_file_id": getattr(self, "current_project_file_id", None),
+            "door_model_id": getattr(self, "current_door_model_id", None),
+            "db_file_name": getattr(self, "current_db_file_name", None),
+            "db_file_folder": getattr(self, "current_db_file_folder", None),
+            "selected_db_model_id": getattr(self, "selected_db_model_id", None),
+            "selected": set(getattr(self, "selected_handles", set())),
+            "groups": copy.deepcopy(getattr(self, "parametric_groups", [])),
+            "block_keep_state": dict(getattr(self, "block_keep_state", {})),
+            "project_meta": copy.deepcopy(getattr(self, "project_meta", {})),
+        }
+
+        try:
+            folder_path = os.path.abspath(folder_path)
+            if not os.path.isdir(folder_path):
+                raise FileNotFoundError(folder_path)
+
+            self.project_dir = folder_path
+            dxf_files = self.get_folder_source_dxf_files()
+            if not dxf_files:
+                raise RuntimeError("У вибраній папці або її підпапках немає DXF-файлів.")
+
+            self.dxf_path = os.path.join(self.project_dir, dxf_files[0])
+            self.doc = ezdxf.readfile(self.dxf_path)
+
+            self.current_project_file_id = None
+            self.current_db_file_name = None
+            self.current_db_file_folder = None
+            self.selected_db_model_id = None
+
+            if getattr(self, "db", None) and getattr(self.db, "available", False):
+                model_id = self.db.find_door_model_by_folder(self.project_dir)
+                self.current_door_model_id = model_id
+            else:
+                self.current_door_model_id = None
+
+            self.selected_handles.clear()
+            self.parametric_groups.clear()
+            self.block_keep_state.clear()
+            self.zones_undo_stack.clear()
+            self.zones_redo_stack.clear()
+            self.global_recalc_undo_stack.clear()
+            self.global_recalc_redo_stack.clear()
+
+            self.load_project_config()
+            self.prompt_source_dimensions_on_open()
+            self.register_current_folder_model(show_errors=False)
+            self.load_project_config()
+            self.update_dimension_inputs_from_meta()
+
+            self.history = HistoryManager(self.dxf_path)
+            self.history.save_state()
+            self.save_zones_history_state()
+            self.save_original_geometries()
+
+            self.scan_project_folder_for_dxf()
+            self.update_viewer()
+            self.load_entities_into_list()
+            self.load_groups_into_list()
+            self.load_block_filter_list()
+            self.update_history_buttons_state()
+            self.update_file_status_panel()
+
+            if hasattr(self, "lbl_status_calc"):
+                self.lbl_status_calc.setText(
+                    f"<font color='#a5d6a7'>Відкрито папку моделі: {os.path.basename(self.project_dir)}; "
+                    f"DXF: {len(dxf_files)}</font>"
+                )
+
+        except Exception as exc:
+            self.project_dir = old_state["project_dir"]
+            self.dxf_path = old_state["dxf_path"]
+            self.doc = old_state["doc"]
+            self.current_project_file_id = old_state["project_file_id"]
+            self.current_door_model_id = old_state["door_model_id"]
+            self.current_db_file_name = old_state["db_file_name"]
+            self.current_db_file_folder = old_state["db_file_folder"]
+            self.selected_db_model_id = old_state["selected_db_model_id"]
+            self.selected_handles = old_state["selected"]
+            self.parametric_groups = old_state["groups"]
+            self.block_keep_state = old_state["block_keep_state"]
+            self.project_meta = old_state["project_meta"]
+            QMessageBox.warning(self, "Відкриття папки", f"Не вдалося відкрити папку:\n{exc}")
 
     def apply_loaded_project_config(self, loaded):
         if not loaded:
@@ -21212,20 +21328,66 @@ class MiniCAD(QMainWindow):
     def populate_local_file_tree(self):
         if self.is_db_uri(getattr(self, "project_dir", "")):
             return False
-        files = os.listdir(self.project_dir)
-        dxf_files = [f for f in files if f.lower().endswith('.dxf')]
-        for file_name in dxf_files:
+        dxf_files = self.get_folder_source_dxf_files()
+        if not dxf_files:
+            return False
+
+        folder_nodes = {}
+        current_rel_path = ""
+        try:
+            current_rel_path = os.path.relpath(os.path.abspath(self.dxf_path), os.path.abspath(self.project_dir)).replace("\\", "/")
+        except Exception:
+            current_rel_path = os.path.basename(self.dxf_path)
+
+        for rel_path in dxf_files:
+            rel_path = rel_path.replace("\\", "/")
+            folder_name, file_name = os.path.split(rel_path)
+            parent_item = None
+
+            if folder_name:
+                parts = folder_name.split("/")
+                folder_key = ""
+                for part in parts:
+                    folder_key = f"{folder_key}/{part}".strip("/")
+                    if folder_key not in folder_nodes:
+                        folder_item = QTreeWidgetItem([f"📁 {part}"])
+                        folder_item.setData(
+                            0,
+                            Qt.ItemDataRole.UserRole,
+                            {"type": "local_folder", "folder": folder_key},
+                        )
+                        parent_key = "/".join(folder_key.split("/")[:-1])
+                        if parent_key and parent_key in folder_nodes:
+                            folder_nodes[parent_key].addChild(folder_item)
+                        else:
+                            self.file_explorer_list.addTopLevelItem(folder_item)
+                        folder_nodes[folder_key] = folder_item
+                    parent_item = folder_nodes[folder_key]
+
             item = QTreeWidgetItem([f"DXF {file_name}"])
-            item.setData(0, Qt.ItemDataRole.UserRole, file_name)
-            self.file_explorer_list.addTopLevelItem(item)
-            if file_name.lower() == os.path.basename(self.dxf_path).lower():
+            item.setData(0, Qt.ItemDataRole.UserRole, rel_path)
+            if parent_item is None:
+                self.file_explorer_list.addTopLevelItem(item)
+            else:
+                parent_item.addChild(item)
+
+            if rel_path.lower() == current_rel_path.lower():
                 self.file_explorer_list.setCurrentItem(item)
+                parent = item.parent()
+                while parent is not None:
+                    parent.setExpanded(True)
+                    parent = parent.parent()
         return True
 
     def scan_project_folder_for_dxf(self):
         self.file_explorer_list.blockSignals(True)
         self.file_explorer_list.clear()
         try:
+            if not self.is_db_uri(getattr(self, "project_dir", "")):
+                if self.populate_local_file_tree():
+                    self.file_explorer_list.blockSignals(False)
+                    return
+
             if self.db_opening_enabled() and self.populate_db_model_tree():
                 self.file_explorer_list.blockSignals(False)
                 return
@@ -21244,10 +21406,6 @@ class MiniCAD(QMainWindow):
                             self.file_explorer_list.setCurrentItem(item)
                     self.file_explorer_list.blockSignals(False)
                     return
-
-            if self.populate_local_file_tree():
-                self.file_explorer_list.blockSignals(False)
-                return
 
             files = os.listdir(self.project_dir)
             dxf_files = [f for f in files if f.lower().endswith('.dxf')]
@@ -21269,7 +21427,7 @@ class MiniCAD(QMainWindow):
             if first_data.get("type") == "model":
                 selected_items[0].setExpanded(not selected_items[0].isExpanded())
                 return
-            if first_data.get("type") == "db_folder":
+            if first_data.get("type") in ("db_folder", "local_folder"):
                 selected_items[0].setExpanded(not selected_items[0].isExpanded())
                 return
             self.open_dxf_from_db_record(first_data)
@@ -21279,12 +21437,15 @@ class MiniCAD(QMainWindow):
         base_file_name = selected_items[0].data(0, Qt.ItemDataRole.UserRole)
         self.current_project_file_id = None
         self.current_db_file_name = None
+        self.current_db_file_folder = None
         self.dxf_path = os.path.join(self.project_dir, base_file_name)
         self.doc = ezdxf.readfile(self.dxf_path)
 
         if len(selected_items) > 1:
             for item in selected_items[1:]:
                 addon_file_name = item.data(0, Qt.ItemDataRole.UserRole)
+                if not isinstance(addon_file_name, str):
+                    continue
                 addon_path = os.path.join(self.project_dir, addon_file_name)
                 if os.path.exists(addon_path):
                     try:
@@ -21311,6 +21472,7 @@ class MiniCAD(QMainWindow):
         self.load_groups_into_list()
         self.load_block_filter_list()
         self.update_history_buttons_state()
+        self.update_file_status_panel()
 
     def process_manual_rubber_band(self, rect):
         modifiers = QGuiApplication.keyboardModifiers()

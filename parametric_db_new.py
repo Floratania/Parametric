@@ -4278,6 +4278,7 @@ class ParametricDb:
         door_model_id: Optional[int] = None,
         dxf_bytes: Optional[bytes] = None,
         file_name_override: Optional[str] = None,
+        folder_override: Optional[str] = None,
     ) -> Optional[int]:
         """
         Upsert РїРѕС‚РѕС‡РЅРѕРіРѕ DXF + Р№РѕРіРѕ РіСЂСѓРїРё.
@@ -4653,6 +4654,7 @@ class ParametricDb:
         project_file_id: int = None,
         door_model_id: int = None,
         file_name: str = None,
+        folder_name: str = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Р—Р°РІР°РЅС‚Р°Р¶РµРЅРЅСЏ РєРѕРЅРєСЂРµС‚РЅРѕРіРѕ DXF.
@@ -4664,22 +4666,38 @@ class ParametricDb:
         try:
             if file_name is None and dxf_path:
                 file_name = os.path.basename(dxf_path)
+            folder_name = str(folder_name or "").strip().replace("\\", "/")
 
             with self.connect() as conn:
                 cur = conn.cursor()
 
                 if project_file_id is None and door_model_id is not None and file_name:
-                    project_file_id = self._scalar(
-                        cur,
-                        """
-                        SELECT TOP 1 Id
-                        FROM dbo.ProjectFiles
-                        WHERE DoorModelId = ? AND FileName = ?
-                        ORDER BY Id DESC
-                        """,
-                        door_model_id,
-                        file_name,
-                    )
+                    has_folder_col = "Folder" in self.table_columns("ProjectFiles")
+                    if has_folder_col:
+                        project_file_id = self._scalar(
+                            cur,
+                            """
+                            SELECT TOP 1 Id
+                            FROM dbo.ProjectFiles
+                            WHERE DoorModelId = ? AND FileName = ? AND ISNULL(Folder, N'') = ISNULL(?, N'')
+                            ORDER BY Id DESC
+                            """,
+                            door_model_id,
+                            file_name,
+                            folder_name,
+                        )
+                    else:
+                        project_file_id = self._scalar(
+                            cur,
+                            """
+                            SELECT TOP 1 Id
+                            FROM dbo.ProjectFiles
+                            WHERE DoorModelId = ? AND FileName = ?
+                            ORDER BY Id DESC
+                            """,
+                            door_model_id,
+                            file_name,
+                        )
 
                 if project_file_id is None:
                     return None
