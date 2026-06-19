@@ -14287,6 +14287,7 @@ class MiniCAD(QMainWindow):
             return
         dxf_bytes = self.dxf_doc_to_bytes() if self.is_db_file_open() else None
         file_name_override = getattr(self, "current_db_file_name", None) if self.is_db_file_open() else None
+        folder_override = getattr(self, "current_db_file_folder", None) if self.is_db_file_open() else None
 
         project_file_id = self.db.save_project_snapshot(
             project_dir=self.project_dir,
@@ -14300,6 +14301,7 @@ class MiniCAD(QMainWindow):
             door_model_id=getattr(self, "current_door_model_id", None),
             dxf_bytes=dxf_bytes,
             file_name_override=file_name_override,
+            folder_override=folder_override,
         )
 
         if project_file_id:
@@ -17174,6 +17176,8 @@ class MiniCAD(QMainWindow):
     def build_export_path(self, target_w, target_h):
         name = self.build_export_file_name(target_w, target_h)
         base_name = os.path.splitext(name)[0]
+        width_part = self.sanitize_filename_part(target_w)
+        height_part = self.sanitize_filename_part(target_h)
         output_dir = self.get_export_output_dir(target_w, target_h)
         path = os.path.join(output_dir, name)
         counter = 2
@@ -17221,15 +17225,21 @@ class MiniCAD(QMainWindow):
         return re.search(r"_\d{2,5}_\d{2,5}(?:_\d+)?$", base_name) is not None
 
     def get_folder_source_dxf_files(self):
+        if self.is_db_uri(getattr(self, "project_dir", "")):
+            return []
+        result = []
         try:
-            files = os.listdir(self.project_dir)
+            for root, _dirs, files in os.walk(self.project_dir):
+                for file_name in files:
+                    if not file_name.lower().endswith(".dxf"):
+                        continue
+                    if self.is_generated_dimension_dxf(file_name):
+                        continue
+                    full_path = os.path.join(root, file_name)
+                    result.append(os.path.relpath(full_path, self.project_dir))
         except Exception:
             return []
-        return sorted(
-            file_name for file_name in files
-            if file_name.lower().endswith(".dxf")
-            and not self.is_generated_dimension_dxf(file_name)
-        )
+        return sorted(result)
 
     def preview_parametric_scale(self):
         self.record_action_snapshot()
@@ -17449,6 +17459,7 @@ class MiniCAD(QMainWindow):
         original_door_model_id = getattr(self, "current_door_model_id", None)
         original_selected_db_model_id = getattr(self, "selected_db_model_id", None)
         original_db_file_name = getattr(self, "current_db_file_name", None)
+        original_db_file_folder = getattr(self, "current_db_file_folder", None)
         original_doc = copy.deepcopy(self.doc)
         original_meta = copy.deepcopy(self.project_meta)
         original_groups = copy.deepcopy(self.parametric_groups)
@@ -17466,7 +17477,15 @@ class MiniCAD(QMainWindow):
             for source_file in source_files:
                 source_path = os.path.join(self.project_dir, source_file)
                 if os.path.exists(source_path):
-                    source_entries.append({"type": "local", "file_name": source_file, "path": source_path})
+                    rel_folder = os.path.relpath(os.path.dirname(source_path), self.project_dir)
+                    if rel_folder == ".":
+                        rel_folder = ""
+                    source_entries.append({
+                        "type": "local",
+                        "file_name": os.path.basename(source_file),
+                        "folder": rel_folder.replace("\\", "/"),
+                        "path": source_path,
+                    })
 
         if not source_entries:
             self.lbl_status_calc.setText("<font color='red'>Немає DXF-файлів для створення комплекту.</font>")
@@ -17486,10 +17505,12 @@ class MiniCAD(QMainWindow):
                     file_name = record.get("file_name") or f"project_file_{project_file_id}.dxf"
                     if not file_name.lower().endswith(".dxf"):
                         file_name = f"{file_name}.dxf"
+                    source_folder = str(record.get("folder") or "")
                     self.current_project_file_id = project_file_id
                     self.current_door_model_id = record.get("door_model_id") or original_door_model_id
                     self.selected_db_model_id = self.current_door_model_id
                     self.current_db_file_name = file_name
+                    self.current_db_file_folder = source_folder
                     self.project_dir = f"db://door_model/{self.current_door_model_id or 'unknown'}"
                     self.dxf_path = f"db://project_file/{project_file_id}/{file_name}"
                     self.doc = self.read_dxf_doc_from_bytes(data)
@@ -17500,8 +17521,10 @@ class MiniCAD(QMainWindow):
                         self.load_project_config()
                 else:
                     source_path = entry["path"]
+                    source_folder = str(entry.get("folder") or "")
                     self.dxf_path = source_path
                     self.current_db_file_name = None
+                    self.current_db_file_folder = None
                     self.current_project_file_id = None
                     self.current_door_model_id = original_door_model_id
                     self.doc = ezdxf.readfile(self.dxf_path)
@@ -17539,7 +17562,9 @@ class MiniCAD(QMainWindow):
                     if self.save_export_doc_to_db(export_doc, export_name):
                         outputs.append("БД")
                 if download_dir:
-                    saved_path = self.export_doc_to_path(export_doc, download_dir, export_name)
+                    target_dir = os.path.join(download_dir, source_folder) if source_folder else download_dir
+                    os.makedirs(target_dir, exist_ok=True)
+                    saved_path = self.export_doc_to_path(export_doc, target_dir, export_name)
                     outputs.append(os.path.basename(saved_path))
                 created.append(f"{export_name} ({', '.join(outputs)})" if outputs else export_name)
 
@@ -17548,6 +17573,7 @@ class MiniCAD(QMainWindow):
             self.current_door_model_id = original_door_model_id
             self.selected_db_model_id = original_selected_db_model_id
             self.current_db_file_name = original_db_file_name
+            self.current_db_file_folder = original_db_file_folder
             self.doc = original_doc
             self.project_meta = original_meta
             self.parametric_groups = original_groups
@@ -17576,6 +17602,7 @@ class MiniCAD(QMainWindow):
             self.current_door_model_id = original_door_model_id
             self.selected_db_model_id = original_selected_db_model_id
             self.current_db_file_name = original_db_file_name
+            self.current_db_file_folder = original_db_file_folder
             self.doc = original_doc
             self.project_meta = original_meta
             self.parametric_groups = original_groups
@@ -17938,6 +17965,7 @@ class MiniCAD(QMainWindow):
             "door_model_id": getattr(self, "current_door_model_id", None),
             "selected_db_model_id": getattr(self, "selected_db_model_id", None),
             "db_file_name": getattr(self, "current_db_file_name", None),
+            "db_file_folder": getattr(self, "current_db_file_folder", None),
             "selected": set(getattr(self, "selected_handles", set())),
             "groups": copy.deepcopy(getattr(self, "parametric_groups", [])),
             "block_keep_state": dict(getattr(self, "block_keep_state", {})),
@@ -17954,6 +17982,7 @@ class MiniCAD(QMainWindow):
                 file_name = f"{file_name}.dxf"
 
             self.current_db_file_name = file_name
+            self.current_db_file_folder = str(record.get("folder") or "")
             self.project_dir = f"db://door_model/{record.get('door_model_id') or 'unknown'}"
             self.dxf_path = f"db://project_file/{project_file_id}/{file_name}"
             self.doc = self.read_dxf_doc_from_bytes(data)
@@ -18003,6 +18032,7 @@ class MiniCAD(QMainWindow):
             self.current_door_model_id = old_state["door_model_id"]
             self.selected_db_model_id = old_state["selected_db_model_id"]
             self.current_db_file_name = old_state["db_file_name"]
+            self.current_db_file_folder = old_state["db_file_folder"]
             self.selected_handles = old_state["selected"]
             self.parametric_groups = old_state["groups"]
             self.block_keep_state = old_state["block_keep_state"]
@@ -21137,14 +21167,29 @@ class MiniCAD(QMainWindow):
             model_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "model", **model})
             self.file_explorer_list.addTopLevelItem(model_item)
 
+            folder_items = {}
             for record in self.db.get_model_files(model.get("id")):
+                folder_name = str(record.get("folder") or "").strip()
+                parent_item = model_item
+                if folder_name:
+                    parent_item = folder_items.get(folder_name)
+                    if parent_item is None:
+                        parent_item = QTreeWidgetItem([f"Папка {folder_name}"])
+                        parent_item.setData(0, Qt.ItemDataRole.UserRole, {
+                            "type": "db_folder",
+                            "door_model_id": model.get("id"),
+                            "folder": folder_name,
+                        })
+                        model_item.addChild(parent_item)
+                        folder_items[folder_name] = parent_item
+
                 file_name = record.get("file_name") or f"DB file {record.get('id')}"
                 status = record.get("status") or ""
                 size = record.get("file_data_size")
                 size_text = f" [{size} b]" if size is not None else ""
                 child = QTreeWidgetItem([f"DXF {file_name} {status}{size_text}".strip()])
                 child.setData(0, Qt.ItemDataRole.UserRole, {"type": "db_file", **record})
-                model_item.addChild(child)
+                parent_item.addChild(child)
                 if record.get("id") == self.current_project_file_id:
                     current_item = child
 
@@ -21221,6 +21266,9 @@ class MiniCAD(QMainWindow):
         first_data = selected_items[0].data(0, Qt.ItemDataRole.UserRole)
         if isinstance(first_data, dict):
             if first_data.get("type") == "model":
+                selected_items[0].setExpanded(not selected_items[0].isExpanded())
+                return
+            if first_data.get("type") == "db_folder":
                 selected_items[0].setExpanded(not selected_items[0].isExpanded())
                 return
             self.open_dxf_from_db_record(first_data)

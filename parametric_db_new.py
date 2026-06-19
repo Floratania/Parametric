@@ -3060,6 +3060,7 @@ class ParametricDb:
         door_model_id: Optional[int] = None,
         dxf_bytes: Optional[bytes] = None,
         file_name_override: Optional[str] = None,
+        folder_override: Optional[str] = None,
     ) -> Optional[int]:
         """
         Р РµС”СЃС‚СЂСѓС” РїР°РїРєСѓ СЏРє DoorModel С‚Р° РІСЃС– DXF-С„Р°Р№Р»Рё РІСЃРµСЂРµРґРёРЅС–.
@@ -3074,6 +3075,8 @@ class ParametricDb:
         """
         try:
             folder_path = os.path.abspath(folder_path)
+            self.ensure_project_file_folder_column()
+            has_folder_col = "Folder" in self.table_columns("ProjectFiles")
 
             source_width = project_meta.get("source_width")
             source_height = project_meta.get("source_height")
@@ -3113,93 +3116,180 @@ class ParametricDb:
             with self.connect() as conn:
                 cur = conn.cursor()
 
-                for file_name in sorted(os.listdir(folder_path)):
-                    if not file_name.lower().endswith(".dxf"):
-                        continue
+                dxf_paths = []
+                for root, _dirs, files in os.walk(folder_path):
+                    for file_name in files:
+                        if file_name.lower().endswith(".dxf"):
+                            dxf_paths.append(os.path.join(root, file_name))
 
-                    full_path = os.path.join(folder_path, file_name)
-                    if not os.path.isfile(full_path):
-                        continue
+                for full_path in sorted(dxf_paths):
+                    file_name = os.path.basename(full_path)
+                    rel_folder = os.path.relpath(os.path.dirname(full_path), folder_path)
+                    if rel_folder == ".":
+                        rel_folder = ""
+                    rel_folder = rel_folder.replace("\\", "/")
 
                     with open(full_path, "rb") as f:
                         data = f.read()
 
                     ext = os.path.splitext(file_name)[1] or ".dxf"
 
-                    existing_id = self._scalar(
-                        cur,
-                        """
-                        SELECT TOP 1 Id
-                        FROM dbo.ProjectFiles
-                        WHERE DoorModelId = ? AND FileName = ?
-                        ORDER BY Id DESC
-                        """,
-                        door_model_id,
-                        file_name,
-                    )
-
-                    if existing_id:
-                        cur.execute(
+                    if has_folder_col:
+                        existing_id = self._scalar(
+                            cur,
                             """
-                            UPDATE dbo.ProjectFiles
-                            SET
-                                FileExtension = ?,
-                                FileData = ?,
-                                SourceWidth = ?,
-                                SourceHeight = ?,
-                                SourceDoorOpening = ?,
-                                CurrentDoorOpening = ?,
-                                Status = CASE WHEN Status IS NULL OR Status = '' THEN N'Registered' ELSE Status END,
-                                UpdatedByUserId = ?,
-                                UpdatedAt = SYSDATETIME()
-                            WHERE Id = ?
-                            """,
-                            ext,
-                            pyodbc.Binary(data),
-                            source_width,
-                            source_height,
-                            source_opening,
-                            current_opening,
-                            user_id,
-                            existing_id,
-                        )
-                    else:
-                        cur.execute(
-                            """
-                            INSERT INTO dbo.ProjectFiles
-                            (
-                                DoorModelId,
-                                FileName,
-                                FileExtension,
-                                FileData,
-                                SourceWidth,
-                                SourceHeight,
-                                SourceDoorOpening,
-                                CurrentDoorOpening,
-                                GrowthAxis,
-                                AxisLinkMode,
-                                LinkX,
-                                LinkY,
-                                Status,
-                                CreatedByUserId,
-                                CreatedAt
-                            )
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, N'Registered', ?, SYSDATETIME())
+                            SELECT TOP 1 Id
+                            FROM dbo.ProjectFiles
+                            WHERE DoorModelId = ? AND FileName = ? AND ISNULL(Folder, N'') = ISNULL(?, N'')
+                            ORDER BY Id DESC
                             """,
                             door_model_id,
                             file_name,
-                            ext,
-                            pyodbc.Binary(data),
-                            source_width,
-                            source_height,
-                            source_opening,
-                            current_opening,
-                            project_meta.get("growth_axis") or "both",
-                            file_axis_link_mode,
-                            file_link_x,
-                            file_link_y,
-                            user_id,
+                            rel_folder,
                         )
+                    else:
+                        existing_id = self._scalar(
+                            cur,
+                            """
+                            SELECT TOP 1 Id
+                            FROM dbo.ProjectFiles
+                            WHERE DoorModelId = ? AND FileName = ?
+                            ORDER BY Id DESC
+                            """,
+                            door_model_id,
+                            file_name,
+                        )
+
+                    if existing_id:
+                        if has_folder_col:
+                            cur.execute(
+                                """
+                                UPDATE dbo.ProjectFiles
+                                SET
+                                    FileExtension = ?,
+                                    Folder = ?,
+                                    FileData = ?,
+                                    SourceWidth = ?,
+                                    SourceHeight = ?,
+                                    SourceDoorOpening = ?,
+                                    CurrentDoorOpening = ?,
+                                    Status = CASE WHEN Status IS NULL OR Status = '' THEN N'Registered' ELSE Status END,
+                                    UpdatedByUserId = ?,
+                                    UpdatedAt = SYSDATETIME()
+                                WHERE Id = ?
+                                """,
+                                ext,
+                                rel_folder,
+                                pyodbc.Binary(data),
+                                source_width,
+                                source_height,
+                                source_opening,
+                                current_opening,
+                                user_id,
+                                existing_id,
+                            )
+                        else:
+                            cur.execute(
+                                """
+                                UPDATE dbo.ProjectFiles
+                                SET
+                                    FileExtension = ?,
+                                    FileData = ?,
+                                    SourceWidth = ?,
+                                    SourceHeight = ?,
+                                    SourceDoorOpening = ?,
+                                    CurrentDoorOpening = ?,
+                                    Status = CASE WHEN Status IS NULL OR Status = '' THEN N'Registered' ELSE Status END,
+                                    UpdatedByUserId = ?,
+                                    UpdatedAt = SYSDATETIME()
+                                WHERE Id = ?
+                                """,
+                                ext,
+                                pyodbc.Binary(data),
+                                source_width,
+                                source_height,
+                                source_opening,
+                                current_opening,
+                                user_id,
+                                existing_id,
+                            )
+                    else:
+                        if has_folder_col:
+                            cur.execute(
+                                """
+                                INSERT INTO dbo.ProjectFiles
+                                (
+                                    DoorModelId,
+                                    FileName,
+                                    FileExtension,
+                                    Folder,
+                                    FileData,
+                                    SourceWidth,
+                                    SourceHeight,
+                                    SourceDoorOpening,
+                                    CurrentDoorOpening,
+                                    GrowthAxis,
+                                    AxisLinkMode,
+                                    LinkX,
+                                    LinkY,
+                                    Status,
+                                    CreatedByUserId,
+                                    CreatedAt
+                                )
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, N'Registered', ?, SYSDATETIME())
+                                """,
+                                door_model_id,
+                                file_name,
+                                ext,
+                                rel_folder,
+                                pyodbc.Binary(data),
+                                source_width,
+                                source_height,
+                                source_opening,
+                                current_opening,
+                                project_meta.get("growth_axis") or "both",
+                                file_axis_link_mode,
+                                file_link_x,
+                                file_link_y,
+                                user_id,
+                            )
+                        else:
+                            cur.execute(
+                                """
+                                INSERT INTO dbo.ProjectFiles
+                                (
+                                    DoorModelId,
+                                    FileName,
+                                    FileExtension,
+                                    FileData,
+                                    SourceWidth,
+                                    SourceHeight,
+                                    SourceDoorOpening,
+                                    CurrentDoorOpening,
+                                    GrowthAxis,
+                                    AxisLinkMode,
+                                    LinkX,
+                                    LinkY,
+                                    Status,
+                                    CreatedByUserId,
+                                    CreatedAt
+                                )
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, N'Registered', ?, SYSDATETIME())
+                                """,
+                                door_model_id,
+                                file_name,
+                                ext,
+                                pyodbc.Binary(data),
+                                source_width,
+                                source_height,
+                                source_opening,
+                                current_opening,
+                                project_meta.get("growth_axis") or "both",
+                                file_axis_link_mode,
+                                file_link_x,
+                                file_link_y,
+                                user_id,
+                            )
 
                 conn.commit()
 
@@ -3256,6 +3346,18 @@ class ParametricDb:
                     table_name,
                 )
                 return bool(value)
+        except Exception as exc:
+            self.last_error = str(exc)
+            return False
+
+    def ensure_project_file_folder_column(self) -> bool:
+        try:
+            if "Folder" in self.table_columns("ProjectFiles"):
+                return True
+            with self.connect() as conn:
+                conn.cursor().execute("ALTER TABLE dbo.ProjectFiles ADD Folder NVARCHAR(500) NULL")
+                conn.commit()
+            return True
         except Exception as exc:
             self.last_error = str(exc)
             return False
@@ -4037,12 +4139,14 @@ class ParametricDb:
                 if not model:
                     return None
 
+                has_folder_col = "Folder" in self.table_columns("ProjectFiles")
+                folder_select = "Folder," if has_folder_col else "CAST(N'' AS NVARCHAR(500)) AS Folder,"
                 files = cur.execute(
-                    """
-                    SELECT Id, FileName, FileExtension, DoorModelId, Status, CreatedAt, UpdatedAt
+                    f"""
+                    SELECT Id, FileName, FileExtension, DoorModelId, {folder_select} Status, CreatedAt, UpdatedAt
                     FROM dbo.ProjectFiles
                     WHERE DoorModelId = ?
-                    ORDER BY FileName
+                    ORDER BY Folder, FileName
                     """,
                     door_model_id,
                 ).fetchall()
@@ -4073,6 +4177,7 @@ class ParametricDb:
                             "file_name": row.FileName,
                             "extension": row.FileExtension,
                             "door_model_id": int(row.DoorModelId) if row.DoorModelId else None,
+                            "folder": str(row.Folder or ""),
                             "status": row.Status,
                         }
                         for row in files
@@ -4183,6 +4288,8 @@ class ParametricDb:
             return None
 
         try:
+            self.ensure_project_file_folder_column()
+            has_folder_col = "Folder" in self.table_columns("ProjectFiles")
             if dxf_bytes is None:
                 project_dir = os.path.abspath(project_dir)
                 dxf_path = os.path.abspath(dxf_path)
@@ -4221,6 +4328,7 @@ class ParametricDb:
                 file_data = bytes(dxf_bytes)
 
             file_name = file_name_override or os.path.basename(dxf_path)
+            folder_name = str(folder_override or "").strip().replace("\\", "/")
             ext = os.path.splitext(file_name)[1] or ".dxf"
             text = project_meta.get("door_text") or {}
 
@@ -4228,66 +4336,125 @@ class ParametricDb:
                 cur = conn.cursor()
 
                 if project_file_id is None:
-                    project_file_id = self._scalar(
-                        cur,
-                        """
-                        SELECT TOP 1 Id
-                        FROM dbo.ProjectFiles
-                        WHERE DoorModelId = ? AND FileName = ?
-                        ORDER BY Id DESC
-                        """,
-                        door_model_id,
-                        file_name,
-                    )
+                    if has_folder_col:
+                        project_file_id = self._scalar(
+                            cur,
+                            """
+                            SELECT TOP 1 Id
+                            FROM dbo.ProjectFiles
+                            WHERE DoorModelId = ? AND FileName = ? AND ISNULL(Folder, N'') = ISNULL(?, N'')
+                            ORDER BY Id DESC
+                            """,
+                            door_model_id,
+                            file_name,
+                            folder_name,
+                        )
+                    else:
+                        project_file_id = self._scalar(
+                            cur,
+                            """
+                            SELECT TOP 1 Id
+                            FROM dbo.ProjectFiles
+                            WHERE DoorModelId = ? AND FileName = ?
+                            ORDER BY Id DESC
+                            """,
+                            door_model_id,
+                            file_name,
+                        )
 
                 if project_file_id is None:
-                    cur.execute(
-                        """
-                        INSERT INTO dbo.ProjectFiles
-                        (
-                            DoorModelId,
-                            FileName,
-                            FileExtension,
-                            FileData,
-                            SourceWidth,
-                            SourceHeight,
-                            SourceDoorOpening,
-                            CurrentDoorOpening,
-                            GrowthAxis,
-                            AxisLinkMode,
-                            LinkX,
-                            LinkY,
-                            Status,
-                            CreatedByUserId,
-                            CreatedAt
+                    if has_folder_col:
+                        cur.execute(
+                            """
+                            INSERT INTO dbo.ProjectFiles
+                            (
+                                DoorModelId,
+                                FileName,
+                                FileExtension,
+                                Folder,
+                                FileData,
+                                SourceWidth,
+                                SourceHeight,
+                                SourceDoorOpening,
+                                CurrentDoorOpening,
+                                GrowthAxis,
+                                AxisLinkMode,
+                                LinkX,
+                                LinkY,
+                                Status,
+                                CreatedByUserId,
+                                CreatedAt
+                            )
+                            OUTPUT INSERTED.Id
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, SYSDATETIME())
+                            """,
+                            door_model_id,
+                            file_name,
+                            ext,
+                            folder_name,
+                            pyodbc.Binary(file_data),
+                            project_meta.get("source_width"),
+                            project_meta.get("source_height"),
+                            project_meta.get("source_door_opening") or project_meta.get("door_opening") or "left",
+                            project_meta.get("door_opening") or project_meta.get("source_door_opening") or "left",
+                            project_meta.get("growth_axis") or "both",
+                            axis_link_mode,
+                            link_x,
+                            link_y,
+                            status,
+                            user_id,
                         )
-                        OUTPUT INSERTED.Id
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, SYSDATETIME())
-                        """,
-                        door_model_id,
-                        file_name,
-                        ext,
-                        pyodbc.Binary(file_data),
-                        project_meta.get("source_width"),
-                        project_meta.get("source_height"),
-                        project_meta.get("source_door_opening") or project_meta.get("door_opening") or "left",
-                        project_meta.get("door_opening") or project_meta.get("source_door_opening") or "left",
-                        project_meta.get("growth_axis") or "both",
-                        axis_link_mode,
-                        link_x,
-                        link_y,
-                        status,
-                        user_id,
-                    )
+                    else:
+                        cur.execute(
+                            """
+                            INSERT INTO dbo.ProjectFiles
+                            (
+                                DoorModelId,
+                                FileName,
+                                FileExtension,
+                                FileData,
+                                SourceWidth,
+                                SourceHeight,
+                                SourceDoorOpening,
+                                CurrentDoorOpening,
+                                GrowthAxis,
+                                AxisLinkMode,
+                                LinkX,
+                                LinkY,
+                                Status,
+                                CreatedByUserId,
+                                CreatedAt
+                            )
+                            OUTPUT INSERTED.Id
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, SYSDATETIME())
+                            """,
+                            door_model_id,
+                            file_name,
+                            ext,
+                            pyodbc.Binary(file_data),
+                            project_meta.get("source_width"),
+                            project_meta.get("source_height"),
+                            project_meta.get("source_door_opening") or project_meta.get("door_opening") or "left",
+                            project_meta.get("door_opening") or project_meta.get("source_door_opening") or "left",
+                            project_meta.get("growth_axis") or "both",
+                            axis_link_mode,
+                            link_x,
+                            link_y,
+                            status,
+                            user_id,
+                        )
                     project_file_id = int(cur.fetchone()[0])
                 else:
+                    folder_assignment = "Folder = ?," if has_folder_col else ""
+                    folder_params = [folder_name] if has_folder_col else []
                     cur.execute(
-                        """
+                        f"""
                         UPDATE dbo.ProjectFiles
                         SET
                             DoorModelId = ?,
                             FileName = ?,
                             FileExtension = ?,
+                            {folder_assignment}
                             FileData = ?,
                             SourceWidth = ?,
                             SourceHeight = ?,
@@ -4305,6 +4472,7 @@ class ParametricDb:
                         door_model_id,
                         file_name,
                         ext,
+                        *folder_params,
                         pyodbc.Binary(file_data),
                         project_meta.get("source_width"),
                         project_meta.get("source_height"),
@@ -4676,21 +4844,24 @@ class ParametricDb:
 
     def get_model_files(self, door_model_id: int) -> List[Dict[str, Any]]:
         try:
+            has_folder_col = "Folder" in self.table_columns("ProjectFiles")
+            folder_select = "Folder," if has_folder_col else "CAST(N'' AS NVARCHAR(500)) AS Folder,"
             with self.connect() as conn:
                 rows = conn.cursor().execute(
-                    """
+                    f"""
                     SELECT
                         Id,
                         FileName,
                         FileExtension,
                         DoorModelId,
+                        {folder_select}
                         Status,
                         CreatedAt,
                         UpdatedAt,
                         DATALENGTH(FileData) AS FileDataSize
                     FROM dbo.ProjectFiles
                     WHERE DoorModelId = ?
-                    ORDER BY FileName
+                    ORDER BY Folder, FileName
                     """,
                     door_model_id,
                 ).fetchall()
@@ -4701,6 +4872,7 @@ class ParametricDb:
                         "file_name": r.FileName,
                         "extension": r.FileExtension,
                         "door_model_id": int(r.DoorModelId) if r.DoorModelId else None,
+                        "folder": str(r.Folder or ""),
                         "status": r.Status,
                         "file_data_size": int(r.FileDataSize or 0),
                         "created_at": r.CreatedAt,
