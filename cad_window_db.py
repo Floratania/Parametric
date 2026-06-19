@@ -18686,6 +18686,10 @@ class MiniCAD(QMainWindow):
         self.selected_db_model_id = model.get("id")
         self.current_door_model_id = model.get("id")
         self.current_project_file_id = None
+        self.current_db_file_name = None
+        self.current_db_file_folder = None
+        self.project_dir = f"db://door_model/{model.get('id')}"
+        self.dxf_path = f"db://door_model/{model.get('id')}"
         self.scan_project_folder_for_dxf()
         if hasattr(self, "lbl_status_calc"):
             model_name = model.get("model_name") or f"Model {model.get('id')}"
@@ -22001,7 +22005,8 @@ class MiniCAD(QMainWindow):
         self.file_explorer_list.blockSignals(True)
         self.file_explorer_list.clear()
         try:
-            if not self.is_db_uri(getattr(self, "project_dir", "")):
+            force_db_tree = bool(getattr(self, "selected_db_model_id", None))
+            if not force_db_tree and not self.is_db_uri(getattr(self, "project_dir", "")):
                 if self.populate_local_file_tree():
                     self.file_explorer_list.blockSignals(False)
                     return
