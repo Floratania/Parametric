@@ -14478,6 +14478,144 @@ class MiniCAD(QMainWindow):
         self.update_file_status_panel()
         self.lbl_status_calc.setText("<font color='#a5d6a7'>Папку/файли прив'язано до вибраної моделі.</font>")
 
+    def folder_has_dxf_recursive(self, folder_path):
+        try:
+            for _root, _dirs, files in os.walk(folder_path):
+                if any(name.lower().endswith(".dxf") for name in files):
+                    return True
+        except Exception:
+            return False
+        return False
+
+    def batch_model_folders_from_parent(self, parent_folder):
+        try:
+            child_dirs = [
+                os.path.join(parent_folder, name)
+                for name in sorted(os.listdir(parent_folder))
+                if os.path.isdir(os.path.join(parent_folder, name))
+            ]
+        except Exception:
+            return []
+
+        model_folders = [folder for folder in child_dirs if self.folder_has_dxf_recursive(folder)]
+        if model_folders:
+            return model_folders
+        if self.folder_has_dxf_recursive(parent_folder):
+            return [parent_folder]
+        return []
+
+    def ask_batch_import_model_defaults(self, model_count):
+        guessed_w = self.project_meta.get("source_width")
+        guessed_h = self.project_meta.get("source_height")
+        default_size = ""
+        if guessed_w is not None and guessed_h is not None:
+            default_size = f"{self.format_dimension_value(guessed_w)} x {self.format_dimension_value(guessed_h)}"
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Пакетний імпорт моделей")
+        form = QFormLayout(dialog)
+        form.addRow(QLabel(f"Буде імпортовано моделей: {model_count}"))
+        input_size = QLineEdit(default_size)
+        combo_opening = QComboBox()
+        combo_opening.addItems(["Ліве", "Праве"])
+        if self.project_meta.get("source_door_opening") == "right":
+            combo_opening.setCurrentText("Праве")
+        form.addRow("Початковий розмір W x H:", input_size)
+        form.addRow("Початкове відкривання:", combo_opening)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+
+        values = [
+            float(value.replace(",", "."))
+            for value in re.findall(r"-?\d+(?:[,.]\d+)?", input_size.text())
+        ]
+        if len(values) < 2:
+            QMessageBox.warning(self, "Пакетний імпорт", "Введіть два числа, наприклад: 860 x 2040")
+            return None
+        return {
+            "source_width": values[0],
+            "source_height": values[1],
+            "source_door_opening": "right" if combo_opening.currentText() == "Праве" else "left",
+        }
+
+    def batch_import_models_from_folder(self):
+        if not getattr(self, "db", None) or not getattr(self.db, "available", False):
+            QMessageBox.warning(self, "Пакетний імпорт", "БД недоступна.")
+            return
+        if not self.current_user_id():
+            QMessageBox.warning(self, "Пакетний імпорт", "Користувач не визначений.")
+            return
+
+        parent_folder = QFileDialog.getExistingDirectory(
+            self,
+            "Виберіть папку, де лежать моделі дверей",
+            self.project_dir if not self.is_db_uri(getattr(self, "project_dir", "")) else os.getcwd(),
+        )
+        if not parent_folder:
+            return
+
+        parent_folder = os.path.abspath(parent_folder)
+        model_folders = self.batch_model_folders_from_parent(parent_folder)
+        if not model_folders:
+            QMessageBox.information(
+                self,
+                "Пакетний імпорт",
+                "У вибраній папці не знайдено моделей з DXF-файлами.",
+            )
+            return
+
+        defaults = self.ask_batch_import_model_defaults(len(model_folders))
+        if not defaults:
+            return
+
+        imported = []
+        failed = []
+        for model_folder in model_folders:
+            meta = copy.deepcopy(self.default_project_meta())
+            meta.update(defaults)
+            meta["target_width"] = defaults["source_width"]
+            meta["target_height"] = defaults["source_height"]
+            meta["door_opening"] = defaults["source_door_opening"]
+            meta["target_door_opening"] = defaults["source_door_opening"]
+            try:
+                door_model_id = self.db.register_folder_dxf_files(
+                    model_folder,
+                    meta,
+                    self.current_user_id(),
+                )
+                if door_model_id:
+                    imported.append((model_folder, door_model_id))
+                else:
+                    failed.append((model_folder, self.db.last_error))
+            except Exception as exc:
+                failed.append((model_folder, str(exc)))
+
+        if imported:
+            self.project_dir = "db://door_models"
+            self.selected_db_model_id = None
+            self.current_door_model_id = imported[0][1]
+            self.current_project_file_id = None
+            self.current_db_file_name = None
+            self.current_db_file_folder = None
+            self.scan_project_folder_for_dxf()
+            self.update_file_status_panel()
+
+        message = f"Імпортовано моделей: {len(imported)}"
+        if failed:
+            failed_names = ", ".join(os.path.basename(path) for path, _err in failed[:5])
+            message += f"; помилки: {len(failed)} ({failed_names})"
+        self.lbl_status_calc.setText(
+            f"<font color='{'#ff9800' if failed else '#a5d6a7'}'>{message}</font>"
+        )
+        if failed:
+            detail = "\n".join(f"{os.path.basename(path)}: {err}" for path, err in failed[:20])
+            QMessageBox.warning(self, "Пакетний імпорт", f"Частину моделей не імпортовано:\n{detail}")
+
     def delete_door_model_from_server(self):
         if not getattr(self, "db", None) or not getattr(self.db, "available", False):
             QMessageBox.warning(self, "Модель", "БД недоступна.")
@@ -15036,6 +15174,9 @@ class MiniCAD(QMainWindow):
         self.btn_attach_folder_to_model = QPushButton("Папку до моделі")
         self.btn_attach_folder_to_model.clicked.connect(self.attach_current_folder_to_model)
         model_actions_box.addWidget(self.btn_attach_folder_to_model)
+        self.btn_batch_import_models = QPushButton("Імпорт моделей")
+        self.btn_batch_import_models.clicked.connect(self.batch_import_models_from_folder)
+        model_actions_box.addWidget(self.btn_batch_import_models)
         self.btn_delete_door_model = QPushButton("Видалити модель")
         self.btn_delete_door_model.clicked.connect(self.delete_door_model_from_server)
         model_actions_box.addWidget(self.btn_delete_door_model)
