@@ -13395,6 +13395,8 @@ import io
 import json
 import csv
 import re
+import shutil
+import tempfile
 import zipfile
 import xml.etree.ElementTree as ET
 from PySide6.QtGui import QShortcut, QKeySequence
@@ -17310,6 +17312,33 @@ class MiniCAD(QMainWindow):
         text = self.format_dimension_value(value)
         return re.sub(r"[^0-9A-Za-zА-Яа-я_\-.]+", "_", text)
 
+    def sanitize_model_name(self, value, fallback="model"):
+        return re.sub(r"[^0-9A-Za-zА-Яа-я_\-.]+", "_", str(value or fallback)).strip("_") or fallback
+
+    def ask_export_zip_path(self, title, default_name):
+        start_dir = self.project_dir if not self.is_db_uri(getattr(self, "project_dir", "")) else os.getcwd()
+        default_path = os.path.join(start_dir, default_name)
+        zip_path, _ = QFileDialog.getSaveFileName(
+            self,
+            title,
+            default_path,
+            "ZIP Archive (*.zip);;All Files (*)",
+        )
+        if not zip_path:
+            return None
+        if not zip_path.lower().endswith(".zip"):
+            zip_path += ".zip"
+        return zip_path
+
+    def zip_directory(self, source_dir, zip_path):
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for root, _dirs, files in os.walk(source_dir):
+                for file_name in files:
+                    full_path = os.path.join(root, file_name)
+                    rel_path = os.path.relpath(full_path, source_dir).replace("\\", "/")
+                    archive.write(full_path, rel_path)
+        return zip_path
+
     def parse_door_opening_value(self, value):
         text = str(value or "").strip().lower()
         if not text:
@@ -17417,31 +17446,21 @@ class MiniCAD(QMainWindow):
             self.lbl_status_calc.setText("<font color='#4fc3f7'>Перегляд застосовано тільки на екрані. Файл ще не збережено.</font>")
 
     def ask_model_export_options(self, target_w, target_h):
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Створити комплект моделі")
-        layout = QVBoxLayout(dialog)
-        layout.addWidget(QLabel(
-            f"Новий розмір: {self.format_dimension_value(target_w)} x {self.format_dimension_value(target_h)}"
-        ))
-        check_db = QCheckBox("Створити записи в БД")
-        check_db.setChecked(bool(getattr(self, "db", None) and getattr(self.db, "available", False)))
-        check_download = QCheckBox("Вивантажити папку на комп'ютер")
-        check_download.setChecked(False)
-        layout.addWidget(check_db)
-        layout.addWidget(check_download)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+        model_name = "model"
+        if getattr(self, "current_door_model_id", None) and getattr(self, "db", None):
+            model = self.db.load_door_model(self.current_door_model_id)
+            if model:
+                model_name = model.get("model_name") or model_name
+        elif not self.is_db_uri(getattr(self, "project_dir", "")):
+            model_name = os.path.basename(self.project_dir) or model_name
+        default_name = (
+            f"{self.sanitize_model_name(model_name)}_"
+            f"{self.sanitize_filename_part(target_w)}_{self.sanitize_filename_part(target_h)}.zip"
+        )
+        zip_path = self.ask_export_zip_path("Куди зберегти ZIP комплекту моделі?", default_name)
+        if not zip_path:
             return None
-        if not check_db.isChecked() and not check_download.isChecked():
-            QMessageBox.information(self, "Комплект моделі", "Виберіть хоча б один варіант: БД або папка на комп'ютері.")
-            return None
-        return {
-            "save_to_db": check_db.isChecked(),
-            "download": check_download.isChecked(),
-        }
+        return {"zip_path": zip_path}
 
     def make_download_output_dir(self, target_w, target_h):
         parent = QFileDialog.getExistingDirectory(
@@ -17460,6 +17479,22 @@ class MiniCAD(QMainWindow):
             model_name = os.path.basename(self.project_dir) or model_name
         safe_model = re.sub(r"[^0-9A-Za-zА-Яа-я_\-.]+", "_", str(model_name)).strip("_") or "model"
         folder_name = f"{safe_model}_{self.sanitize_filename_part(target_w)}_{self.sanitize_filename_part(target_h)}"
+        output_dir = os.path.join(parent, folder_name)
+        os.makedirs(output_dir, exist_ok=True)
+        return output_dir
+
+    def make_download_output_dir_in_parent(self, parent, target_w, target_h):
+        model_name = "model"
+        if getattr(self, "current_door_model_id", None) and getattr(self, "db", None):
+            model = self.db.load_door_model(self.current_door_model_id)
+            if model:
+                model_name = model.get("model_name") or model_name
+        elif not self.is_db_uri(getattr(self, "project_dir", "")):
+            model_name = os.path.basename(self.project_dir) or model_name
+        folder_name = (
+            f"{self.sanitize_model_name(model_name)}_"
+            f"{self.sanitize_filename_part(target_w)}_{self.sanitize_filename_part(target_h)}"
+        )
         output_dir = os.path.join(parent, folder_name)
         os.makedirs(output_dir, exist_ok=True)
         return output_dir
@@ -17550,6 +17585,29 @@ class MiniCAD(QMainWindow):
 
         target_w = self.project_meta.get("target_width")
         target_h = self.project_meta.get("target_height")
+        default_zip_name = (
+            f"{os.path.splitext(self.current_dxf_file_name())[0]}_"
+            f"{self.sanitize_filename_part(target_w)}_{self.sanitize_filename_part(target_h)}.zip"
+        )
+        zip_path = self.ask_export_zip_path("Куди зберегти ZIP з DXF?", default_zip_name)
+        if not zip_path:
+            if original_doc is not None:
+                self.doc = original_doc
+                self.save_current_dxf()
+            if original_bytes is not None:
+                with open(self.dxf_path, "wb") as f:
+                    f.write(original_bytes)
+                self.doc = ezdxf.readfile(self.dxf_path)
+            self.project_meta = original_meta
+            self.parametric_groups = original_groups
+            self.block_keep_state = original_keep_state
+            self.save_original_geometries()
+            self.update_dimension_inputs_from_meta()
+            self.load_groups_into_list()
+            self.load_entities_into_list()
+            self.update_viewer()
+            return
+        temp_root = tempfile.mkdtemp(prefix="parametric_single_")
 
         export_doc = copy.deepcopy(self.doc)
         export_msp = export_doc.modelspace()
@@ -17563,14 +17621,11 @@ class MiniCAD(QMainWindow):
                 export_msp.delete_entity(export_doc.entitydb[hndl])
 
         self.apply_opening_to_export_doc(export_doc)
-        if self.is_db_file_open():
-            export_name = self.build_export_file_name(target_w, target_h)
-            self.save_export_doc_to_db(export_doc, export_name)
-        else:
-            export_path = self.build_export_path(target_w, target_h)
-            export_doc.saveas(export_path)
-            self.save_generated_project_config(export_path, target_w, target_h)
-            self.save_export_to_db(export_path)
+        export_name = self.build_export_file_name(target_w, target_h)
+        output_dir = self.make_download_output_dir_in_parent(temp_root, target_w, target_h)
+        export_path = self.export_doc_to_path(export_doc, output_dir, export_name)
+        self.zip_directory(temp_root, zip_path)
+        shutil.rmtree(temp_root, ignore_errors=True)
         if original_bytes is not None:
             with open(self.dxf_path, "wb") as f:
                 f.write(original_bytes)
@@ -17588,8 +17643,7 @@ class MiniCAD(QMainWindow):
         self.load_groups_into_list()
         self.load_entities_into_list()
         self.update_viewer()
-        created_name = export_name if self.is_db_file_open() else os.path.basename(export_path)
-        self.lbl_status_calc.setText(f"<font color='#a5d6a7'>Створено: {created_name}</font>")
+        self.lbl_status_calc.setText(f"<font color='#a5d6a7'>Створено ZIP: {zip_path}</font>")
 
     def export_model_dxf_with_dimensions(self):
         """Export all source DXF files from the current folder/model with the same target size."""
@@ -17607,14 +17661,8 @@ class MiniCAD(QMainWindow):
         if not options:
             return
 
-        download_dir = None
-        if options["download"]:
-            download_dir = self.make_download_output_dir(target_w, target_h)
-            if not download_dir:
-                return
-
-        if options["save_to_db"] and not self.is_db_uri(getattr(self, "project_dir", "")):
-            self.register_current_folder_model(show_errors=False)
+        temp_root = tempfile.mkdtemp(prefix="parametric_export_")
+        download_dir = self.make_download_output_dir_in_parent(temp_root, target_w, target_h)
 
         original_dxf_path = self.dxf_path
         original_project_file_id = getattr(self, "current_project_file_id", None)
@@ -17650,6 +17698,7 @@ class MiniCAD(QMainWindow):
                     })
 
         if not source_entries:
+            shutil.rmtree(temp_root, ignore_errors=True)
             self.lbl_status_calc.setText("<font color='red'>Немає DXF-файлів для створення комплекту.</font>")
             return
 
@@ -17719,16 +17768,10 @@ class MiniCAD(QMainWindow):
 
                 self.apply_opening_to_export_doc(export_doc)
                 export_name = self.build_export_file_name(target_w, target_h)
-                outputs = []
-                if options["save_to_db"]:
-                    if self.save_export_doc_to_db(export_doc, export_name):
-                        outputs.append("БД")
-                if download_dir:
-                    target_dir = os.path.join(download_dir, source_folder) if source_folder else download_dir
-                    os.makedirs(target_dir, exist_ok=True)
-                    saved_path = self.export_doc_to_path(export_doc, target_dir, export_name)
-                    outputs.append(os.path.basename(saved_path))
-                created.append(f"{export_name} ({', '.join(outputs)})" if outputs else export_name)
+                target_dir = os.path.join(download_dir, source_folder) if source_folder else download_dir
+                os.makedirs(target_dir, exist_ok=True)
+                saved_path = self.export_doc_to_path(export_doc, target_dir, export_name)
+                created.append(os.path.basename(saved_path))
 
             self.dxf_path = original_dxf_path
             self.current_project_file_id = original_project_file_id
@@ -17748,17 +17791,15 @@ class MiniCAD(QMainWindow):
             self.load_groups_into_list()
             self.load_entities_into_list()
             self.update_viewer()
-            where = []
-            if options["save_to_db"]:
-                where.append("БД")
-            if download_dir:
-                where.append(download_dir)
-            suffix = f" → {' + '.join(where)}" if where else ""
+            self.zip_directory(temp_root, options["zip_path"])
+            shutil.rmtree(temp_root, ignore_errors=True)
+            suffix = f" → {options['zip_path']}"
             if skipped:
                 self.lbl_status_calc.setText(f"<font color='#ff9800'>Комплект створено: {len(created)} DXF{suffix}, пропущено: {skipped}</font>")
             else:
                 self.lbl_status_calc.setText(f"<font color='#a5d6a7'>Комплект створено: {len(created)} DXF{suffix}</font>")
         except Exception as e:
+            shutil.rmtree(temp_root, ignore_errors=True)
             self.dxf_path = original_dxf_path
             self.current_project_file_id = original_project_file_id
             self.current_door_model_id = original_door_model_id
@@ -17773,44 +17814,10 @@ class MiniCAD(QMainWindow):
             self.lbl_status_calc.setText(f"<font color='red'>Помилка експорту комплекту: {e}</font>")
 
     def ask_batch_table_export_options(self):
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Пакет з Excel/CSV")
-        layout = QVBoxLayout(dialog)
-        layout.addWidget(QLabel("Куди створювати DXF з рядків Excel?"))
-
-        check_db = QCheckBox("Створити записи в БД")
-        check_db.setChecked(bool(getattr(self, "db", None) and getattr(self.db, "available", False)))
-        check_db.setEnabled(bool(getattr(self, "db", None) and getattr(self.db, "available", False)))
-        check_download = QCheckBox("Вивантажити папки на комп'ютер")
-        check_download.setChecked(True)
-        layout.addWidget(check_db)
-        layout.addWidget(check_download)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons)
-
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+        zip_path = self.ask_export_zip_path("Куди зберегти ZIP пакета?", "parametric_batch_export.zip")
+        if not zip_path:
             return None
-        if not check_db.isChecked() and not check_download.isChecked():
-            QMessageBox.information(self, "Пакет", "Виберіть БД або вивантаження на комп'ютер.")
-            return None
-
-        download_parent = None
-        if check_download.isChecked():
-            download_parent = QFileDialog.getExistingDirectory(
-                self,
-                "Куди вивантажити пакет?",
-                self.project_dir if not self.is_db_uri(getattr(self, "project_dir", "")) else os.getcwd(),
-            )
-            if not download_parent:
-                return None
-
-        return {
-            "save_to_db": check_db.isChecked(),
-            "download_parent": download_parent,
-        }
+        return {"zip_path": zip_path}
 
     def batch_job_model_key(self, job):
         for key in ("model_id", "door_model_id", "model", "model_name", "door_model", "model_folder", "folder_path"):
@@ -17938,10 +17945,12 @@ class MiniCAD(QMainWindow):
             "keep_state": copy.deepcopy(self.block_keep_state),
         }
 
+        temp_root = tempfile.mkdtemp(prefix="parametric_batch_")
         try:
             rows = self.read_xlsx_rows(path) if path.lower().endswith(".xlsx") else self.read_csv_rows(path)
             jobs = self.extract_batch_jobs(rows)
             if not jobs:
+                shutil.rmtree(temp_root, ignore_errors=True)
                 QMessageBox.information(self, "Пакет", "У таблиці немає рядків з параметрами.")
                 return
 
@@ -18031,21 +18040,14 @@ class MiniCAD(QMainWindow):
                         self.apply_opening_to_export_doc(export_doc)
 
                         export_name = self.build_export_file_name(target_w, target_h)
-                        outputs = []
-                        if options["save_to_db"]:
-                            if self.save_export_doc_to_db(export_doc, export_name):
-                                outputs.append("БД")
-                        download_parent = options.get("download_parent")
-                        if download_parent:
-                            model_dir = self.batch_download_dir_for_job(download_parent, model, target_w, target_h)
-                            source_folder = str(entry.get("folder") or (entry.get("record") or {}).get("folder") or "")
-                            target_dir = os.path.join(model_dir, source_folder) if source_folder else model_dir
-                            os.makedirs(target_dir, exist_ok=True)
-                            saved_path = self.export_doc_to_path(export_doc, target_dir, export_name)
-                            outputs.append(os.path.basename(saved_path))
+                        model_dir = self.batch_download_dir_for_job(temp_root, model, target_w, target_h)
+                        source_folder = str(entry.get("folder") or (entry.get("record") or {}).get("folder") or "")
+                        target_dir = os.path.join(model_dir, source_folder) if source_folder else model_dir
+                        os.makedirs(target_dir, exist_ok=True)
+                        saved_path = self.export_doc_to_path(export_doc, target_dir, export_name)
 
                         model_label = (model or {}).get("model_name") or os.path.basename(self.project_dir) or "model"
-                        created.append(f"{model_label}: {export_name} ({', '.join(outputs)})")
+                        created.append(f"{model_label}: {os.path.basename(saved_path)}")
 
                     finally:
                         if original_source_bytes is not None:
@@ -18056,6 +18058,8 @@ class MiniCAD(QMainWindow):
                                     f.write(original_source_bytes)
 
             self.restore_batch_original_state(original_state)
+            self.zip_directory(temp_root, options["zip_path"])
+            shutil.rmtree(temp_root, ignore_errors=True)
             self.scan_project_folder_for_dxf()
             self.update_dimension_inputs_from_meta()
             self.load_groups_into_list()
@@ -18066,11 +18070,12 @@ class MiniCAD(QMainWindow):
                 QMessageBox.warning(self, "Пакет", "Частину рядків пропущено:\n" + "\n".join(failed[:20]))
             if skipped:
                 self.lbl_status_calc.setText(
-                    f"<font color='#ff9800'>Пакет створено: {len(created)} DXF, пропущено: {skipped}</font>"
+                    f"<font color='#ff9800'>Пакет створено ZIP: {options['zip_path']}; DXF: {len(created)}, пропущено: {skipped}</font>"
                 )
             else:
-                self.lbl_status_calc.setText(f"<font color='#a5d6a7'>Пакет створено: {len(created)} DXF</font>")
+                self.lbl_status_calc.setText(f"<font color='#a5d6a7'>Пакет створено ZIP: {options['zip_path']}; DXF: {len(created)}</font>")
         except Exception as e:
+            shutil.rmtree(temp_root, ignore_errors=True)
             self.restore_batch_original_state(original_state)
             self.lbl_status_calc.setText(f"<font color='red'>Помилка пакета: {e}</font>")
 
