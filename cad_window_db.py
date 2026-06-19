@@ -14480,6 +14480,245 @@ class MiniCAD(QMainWindow):
         self.update_file_status_panel()
         self.lbl_status_calc.setText("<font color='#a5d6a7'>Папку/файли прив'язано до вибраної моделі.</font>")
 
+    def opposite_opening_value(self, opening):
+        return "right" if str(opening or "left").lower() != "right" else "left"
+
+    def opening_label(self, opening):
+        return "праве" if str(opening or "").lower() == "right" else "ліве"
+
+    def opposite_model_name(self, source_name, target_opening):
+        base_name = str(source_name or "DoorModel").strip()
+        suffix = "праве" if target_opening == "right" else "ліве"
+        cleaned = re.sub(r"\s*\((ліве|праве|left|right)\)\s*$", "", base_name, flags=re.IGNORECASE)
+        return f"{cleaned} ({suffix})"
+
+    def width_axis_is_y(self, meta=None):
+        meta = meta or self.project_meta
+        link_x, link_y = self.link_pair_for_mode(meta.get("axis_link_mode", "normal"))
+        link_x = meta.get("link_x") or link_x
+        link_y = meta.get("link_y") or link_y
+        return str(link_y) == "Y = W" or str(link_x) == "X = H"
+
+    def mirrored_group_rules_for_opposite(self, groups, mirror_by_y=False):
+        mirrored = copy.deepcopy(groups or [])
+        for group in mirrored:
+            group["handles"] = set(group.get("handles", []))
+            if mirror_by_y:
+                group["growth_dir_y"] = self.flip_y_direction(group.get("growth_dir_y", "Центр"))
+                group["shift_dir_y"] = self.flip_y_direction(group.get("shift_dir_y", "Вгору"))
+            else:
+                group["growth_dir_x"] = self.flip_x_direction(group.get("growth_dir_x", "Центр"))
+                group["shift_dir_x"] = self.flip_x_direction(group.get("shift_dir_x", "Вправо"))
+            self.ensure_topology_fields(group)
+            self.apply_growth_axis_to_group(group)
+        return mirrored
+
+    def mirrored_text_settings_for_opposite(self, settings, axis_value, mirror_by_y=False):
+        mirrored = copy.deepcopy(settings or self.default_text_settings())
+        try:
+            if mirror_by_y:
+                box_h = max(float(mirrored.get("height", 30.0)), 1.0)
+                mirrored["y"] = 2 * axis_value - (float(mirrored.get("y", 0.0)) + box_h)
+                mirrored["rotation"] = (-float(mirrored.get("rotation", 0.0))) % 360.0
+            else:
+                box_w = max(float(mirrored.get("width_factor", 120.0)), 1.0)
+                mirrored["x"] = 2 * axis_value - (float(mirrored.get("x", 0.0)) + box_w)
+                mirrored["rotation"] = (180.0 - float(mirrored.get("rotation", 0.0))) % 360.0
+        except Exception:
+            pass
+        return mirrored
+
+    def mirror_doc_by_width_axis_for_opposite(self, doc, meta=None):
+        min_x, min_y, max_x, max_y = self.get_dxf_bounds(doc)
+        if min_x is None:
+            return None
+        mirror_by_y = self.width_axis_is_y(meta)
+        axis_value = ((min_y + max_y) * 0.5) if mirror_by_y else ((min_x + max_x) * 0.5)
+        for entity in doc.modelspace():
+            if mirror_by_y:
+                self.mirror_entity_vertically(entity, axis_value)
+            else:
+                self.mirror_entity_horizontally(entity, axis_value)
+        return axis_value, mirror_by_y
+
+    def generate_opposite_opening_model(self):
+        if not getattr(self, "db", None) or not getattr(self.db, "available", False):
+            QMessageBox.warning(self, "Протилежне відкривання", "БД недоступна.")
+            return
+        if not self.current_user_id():
+            QMessageBox.warning(self, "Протилежне відкривання", "Користувач не визначений.")
+            return
+
+        if not self.is_db_uri(getattr(self, "project_dir", "")):
+            self.register_current_folder_model(show_errors=False)
+        if getattr(self, "current_project_file_id", None) or not self.is_db_uri(getattr(self, "project_dir", "")):
+            self.save_current_project_to_db("BeforeOppositeOpening")
+
+        source_model_id = getattr(self, "current_door_model_id", None) or getattr(self, "selected_db_model_id", None)
+        if not source_model_id:
+            model = self.pick_door_model("Згенерувати протилежне відкривання")
+            if not model:
+                return
+            source_model_id = int(model.get("id"))
+
+        model_data = self.db.load_door_model(source_model_id)
+        if not model_data:
+            QMessageBox.warning(self, "Протилежне відкривання", f"Не вдалося прочитати модель:\n{self.db.last_error}")
+            return
+
+        source_meta = model_data.get("meta") or {}
+        source_opening = source_meta.get("source_door_opening") or "left"
+        target_opening = self.opposite_opening_value(source_opening)
+        source_name = model_data.get("model_name") or f"Model {source_model_id}"
+        target_name = self.opposite_model_name(source_name, target_opening)
+        default_zip = f"{self.sanitize_model_name(target_name)}.zip"
+        zip_path = self.ask_export_zip_path("Куди зберегти ZIP протилежного відкривання?", default_zip)
+        if not zip_path:
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Протилежне відкривання",
+            (
+                f"Створити нову модель '{target_name}' з {self.opening_label(target_opening)} відкриванням?\n\n"
+                "Геометрія буде дзеркальною по осі ширини W. Напрями росту та зсуву зміняться на протилежні для тієї осі, яка є шириною."
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        source_folder = model_data.get("folder_path") or f"DoorModel_{source_model_id}"
+        opposite_folder_key = f"{source_folder}__opposite_{target_opening}"
+        opposite_meta = copy.deepcopy(source_meta)
+        opposite_meta["source_door_opening"] = target_opening
+        opposite_meta["target_door_opening"] = target_opening
+        opposite_meta["door_opening"] = target_opening
+
+        target_model_id = self.db.get_or_create_door_model(
+            folder_path=opposite_folder_key,
+            model_name=target_name,
+            source_width=opposite_meta.get("source_width"),
+            source_height=opposite_meta.get("source_height"),
+            source_door_opening=target_opening,
+            user_id=self.current_user_id(),
+        )
+        if not target_model_id:
+            QMessageBox.warning(self, "Протилежне відкривання", f"Не вдалося створити модель:\n{self.db.last_error}")
+            return
+
+        original_state = {
+            "project_dir": getattr(self, "project_dir", None),
+            "dxf_path": getattr(self, "dxf_path", None),
+            "project_file_id": getattr(self, "current_project_file_id", None),
+            "door_model_id": getattr(self, "current_door_model_id", None),
+            "selected_db_model_id": getattr(self, "selected_db_model_id", None),
+            "db_file_name": getattr(self, "current_db_file_name", None),
+            "db_file_folder": getattr(self, "current_db_file_folder", None),
+            "doc": copy.deepcopy(self.doc),
+            "meta": copy.deepcopy(self.project_meta),
+            "groups": copy.deepcopy(self.parametric_groups),
+            "keep_state": copy.deepcopy(self.block_keep_state),
+        }
+        temp_root = tempfile.mkdtemp(prefix="parametric_opposite_")
+        created = []
+        skipped = 0
+
+        try:
+            for record in self.db.get_model_files(source_model_id):
+                file_name = record.get("file_name") or f"project_file_{record.get('id')}.dxf"
+                if not str(file_name).lower().endswith(".dxf"):
+                    continue
+                project_file_id = int(record.get("id"))
+                data = self.db.get_project_file_binary(project_file_id)
+                if not data:
+                    skipped += 1
+                    continue
+
+                self.current_project_file_id = project_file_id
+                self.current_door_model_id = source_model_id
+                self.selected_db_model_id = source_model_id
+                self.current_db_file_name = file_name
+                self.current_db_file_folder = str(record.get("folder") or "")
+                self.project_dir = f"db://door_model/{source_model_id}"
+                self.dxf_path = f"db://project_file/{project_file_id}/{file_name}"
+                self.doc = self.read_dxf_doc_from_bytes(data)
+
+                loaded = self.db.load_project_config(project_file_id=project_file_id)
+                if loaded:
+                    self.apply_loaded_project_config(loaded)
+                else:
+                    self.load_project_config()
+
+                target_meta = copy.deepcopy(self.project_meta)
+                mirrored_doc = copy.deepcopy(self.doc)
+                mirror_info = self.mirror_doc_by_width_axis_for_opposite(mirrored_doc, target_meta)
+                if mirror_info is None:
+                    skipped += 1
+                    continue
+                axis_value, mirror_by_y = mirror_info
+
+                target_meta["source_door_opening"] = target_opening
+                target_meta["target_door_opening"] = target_opening
+                target_meta["door_opening"] = target_opening
+                target_meta["door_text"] = self.mirrored_text_settings_for_opposite(
+                    target_meta.get("door_text") or self.default_text_settings(),
+                    axis_value,
+                    mirror_by_y,
+                )
+                target_groups = self.mirrored_group_rules_for_opposite(self.parametric_groups, mirror_by_y)
+                target_keep_state = copy.deepcopy(self.block_keep_state)
+                source_folder_name = str(record.get("folder") or "")
+
+                saved_project_file_id = self.db.save_project_snapshot(
+                    project_dir=opposite_folder_key,
+                    dxf_path=file_name,
+                    project_meta=target_meta,
+                    parametric_groups=target_groups,
+                    block_keep_state=target_keep_state,
+                    user_id=self.current_user_id(),
+                    status="OppositeOpening",
+                    project_file_id=None,
+                    door_model_id=target_model_id,
+                    dxf_bytes=self.dxf_doc_to_bytes(mirrored_doc),
+                    file_name_override=file_name,
+                    folder_override=source_folder_name,
+                )
+                if not saved_project_file_id:
+                    skipped += 1
+                    continue
+
+                target_dir = os.path.join(temp_root, self.sanitize_model_name(target_name), source_folder_name) if source_folder_name else os.path.join(temp_root, self.sanitize_model_name(target_name))
+                os.makedirs(target_dir, exist_ok=True)
+                saved_path = self.export_doc_to_path(mirrored_doc, target_dir, file_name)
+                created.append(os.path.basename(saved_path))
+
+            if not created:
+                raise RuntimeError("Не створено жодного DXF для протилежного відкривання.")
+
+            self.zip_directory(temp_root, zip_path)
+            shutil.rmtree(temp_root, ignore_errors=True)
+            self.restore_batch_original_state(original_state)
+            self.current_door_model_id = target_model_id
+            self.selected_db_model_id = target_model_id
+            self.current_project_file_id = None
+            self.current_db_file_name = None
+            self.current_db_file_folder = None
+            self.project_dir = f"db://door_model/{target_model_id}"
+            self.scan_project_folder_for_dxf()
+            self.update_file_status_panel()
+            self.lbl_status_calc.setText(
+                f"<font color='#a5d6a7'>Створено протилежне відкривання: модель {target_model_id}, DXF: {len(created)}, ZIP: {zip_path}</font>"
+            )
+            if skipped:
+                QMessageBox.information(self, "Протилежне відкривання", f"Створено {len(created)} DXF, пропущено {skipped}.")
+
+        except Exception as exc:
+            shutil.rmtree(temp_root, ignore_errors=True)
+            self.restore_batch_original_state(original_state)
+            QMessageBox.warning(self, "Протилежне відкривання", f"Не вдалося створити протилежне відкривання:\n{exc}")
+
     def folder_has_dxf_recursive(self, folder_path):
         try:
             for _root, _dirs, files in os.walk(folder_path):
@@ -15179,6 +15418,9 @@ class MiniCAD(QMainWindow):
         self.btn_batch_import_models = QPushButton("Імпорт моделей")
         self.btn_batch_import_models.clicked.connect(self.batch_import_models_from_folder)
         model_actions_box.addWidget(self.btn_batch_import_models)
+        self.btn_generate_opposite_model = QPushButton("Протилежне відкривання")
+        self.btn_generate_opposite_model.clicked.connect(self.generate_opposite_opening_model)
+        model_actions_box.addWidget(self.btn_generate_opposite_model)
         self.btn_delete_door_model = QPushButton("Видалити модель")
         self.btn_delete_door_model.clicked.connect(self.delete_door_model_from_server)
         model_actions_box.addWidget(self.btn_delete_door_model)
@@ -16732,6 +16974,7 @@ class MiniCAD(QMainWindow):
             ex, ey, ez = entity.dxf.end
             entity.dxf.start = (2 * axis_x - sx, sy, sz)
             entity.dxf.end = (2 * axis_x - ex, ey, ez)
+            return True
         elif tp in ("CIRCLE", "ARC"):
             cx, cy, cz = entity.dxf.center
             entity.dxf.center = (2 * axis_x - cx, cy, cz)
@@ -16740,10 +16983,25 @@ class MiniCAD(QMainWindow):
                 old_end = float(entity.dxf.end_angle)
                 entity.dxf.start_angle = (180.0 - old_end) % 360.0
                 entity.dxf.end_angle = (180.0 - old_start) % 360.0
+            return True
         elif tp == "TEXT":
             x, y, z = entity.dxf.insert
             entity.dxf.insert = (2 * axis_x - x, y, z)
             entity.dxf.rotation = (180.0 - float(getattr(entity.dxf, "rotation", 0.0))) % 360.0
+            return True
+        elif tp == "LWPOLYLINE":
+            points = []
+            for point in entity.get_points("xyseb"):
+                x, y, start_width, end_width, bulge = point
+                points.append((2 * axis_x - x, y, start_width, end_width, -bulge))
+            entity.set_points(points, format="xyseb")
+            return True
+        elif tp == "POLYLINE":
+            for vertex in entity.vertices:
+                x, y, z = vertex.dxf.location
+                vertex.dxf.location = (2 * axis_x - x, y, z)
+            return True
+        return False
 
     def mirror_entity_vertically(self, entity, axis_y):
         tp = entity.dxftype()
@@ -16752,6 +17010,7 @@ class MiniCAD(QMainWindow):
             ex, ey, ez = entity.dxf.end
             entity.dxf.start = (sx, 2 * axis_y - sy, sz)
             entity.dxf.end = (ex, 2 * axis_y - ey, ez)
+            return True
         elif tp in ("CIRCLE", "ARC"):
             cx, cy, cz = entity.dxf.center
             entity.dxf.center = (cx, 2 * axis_y - cy, cz)
@@ -16760,10 +17019,25 @@ class MiniCAD(QMainWindow):
                 old_end = float(entity.dxf.end_angle)
                 entity.dxf.start_angle = (-old_end) % 360.0
                 entity.dxf.end_angle = (-old_start) % 360.0
+            return True
         elif tp == "TEXT":
             x, y, z = entity.dxf.insert
             entity.dxf.insert = (x, 2 * axis_y - y, z)
             entity.dxf.rotation = (-float(getattr(entity.dxf, "rotation", 0.0))) % 360.0
+            return True
+        elif tp == "LWPOLYLINE":
+            points = []
+            for point in entity.get_points("xyseb"):
+                x, y, start_width, end_width, bulge = point
+                points.append((x, 2 * axis_y - y, start_width, end_width, -bulge))
+            entity.set_points(points, format="xyseb")
+            return True
+        elif tp == "POLYLINE":
+            for vertex in entity.vertices:
+                x, y, z = vertex.dxf.location
+                vertex.dxf.location = (x, 2 * axis_y - y, z)
+            return True
+        return False
 
 
     def flip_x_direction(self, direction):
