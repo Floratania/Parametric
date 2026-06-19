@@ -17772,109 +17772,307 @@ class MiniCAD(QMainWindow):
             self.save_original_geometries()
             self.lbl_status_calc.setText(f"<font color='red'>Помилка експорту комплекту: {e}</font>")
 
+    def ask_batch_table_export_options(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Пакет з Excel/CSV")
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel("Куди створювати DXF з рядків Excel?"))
+
+        check_db = QCheckBox("Створити записи в БД")
+        check_db.setChecked(bool(getattr(self, "db", None) and getattr(self.db, "available", False)))
+        check_db.setEnabled(bool(getattr(self, "db", None) and getattr(self.db, "available", False)))
+        check_download = QCheckBox("Вивантажити папки на комп'ютер")
+        check_download.setChecked(True)
+        layout.addWidget(check_db)
+        layout.addWidget(check_download)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        if not check_db.isChecked() and not check_download.isChecked():
+            QMessageBox.information(self, "Пакет", "Виберіть БД або вивантаження на комп'ютер.")
+            return None
+
+        download_parent = None
+        if check_download.isChecked():
+            download_parent = QFileDialog.getExistingDirectory(
+                self,
+                "Куди вивантажити пакет?",
+                self.project_dir if not self.is_db_uri(getattr(self, "project_dir", "")) else os.getcwd(),
+            )
+            if not download_parent:
+                return None
+
+        return {
+            "save_to_db": check_db.isChecked(),
+            "download_parent": download_parent,
+        }
+
+    def batch_job_model_key(self, job):
+        for key in ("model_id", "door_model_id", "model", "model_name", "door_model", "model_folder", "folder_path"):
+            value = job.get(key)
+            if value not in (None, ""):
+                return key, str(value).strip()
+        return None, ""
+
+    def resolve_batch_job_model(self, job, models):
+        key, value = self.batch_job_model_key(job)
+        if not value:
+            current_id = getattr(self, "current_door_model_id", None) or getattr(self, "selected_db_model_id", None)
+            if current_id:
+                for model in models:
+                    if int(model.get("id")) == int(current_id):
+                        return model, None
+            return None, None
+
+        if key in ("model_id", "door_model_id"):
+            for model in models:
+                if str(model.get("id")) == value:
+                    return model, None
+            return None, f"модель id={value} не знайдена"
+
+        needle = value.lower()
+        for model in models:
+            candidates = [
+                str(model.get("id") or ""),
+                str(model.get("model_name") or ""),
+                os.path.basename(str(model.get("folder_path") or "")),
+                str(model.get("folder_path") or ""),
+            ]
+            if any(needle == candidate.lower() for candidate in candidates if candidate):
+                return model, None
+        for model in models:
+            name = str(model.get("model_name") or "").lower()
+            folder = str(model.get("folder_path") or "").lower()
+            if needle and (needle in name or needle in folder):
+                return model, None
+        return None, f"модель '{value}' не знайдена"
+
+    def batch_source_entries_for_model(self, model):
+        if model and getattr(self, "db", None):
+            return [
+                {"type": "db", "record": record, "model": model}
+                for record in self.db.get_model_files(model.get("id"))
+                if str(record.get("file_name") or "").lower().endswith(".dxf")
+            ]
+
+        entries = []
+        source_files = self.get_folder_source_dxf_files()
+        if not source_files and getattr(self, "dxf_path", None):
+            source_files = [os.path.basename(self.dxf_path)]
+        for source_file in source_files:
+            source_path = os.path.join(self.project_dir, source_file)
+            if not os.path.exists(source_path):
+                continue
+            rel_folder = os.path.relpath(os.path.dirname(source_path), self.project_dir)
+            if rel_folder == ".":
+                rel_folder = ""
+            entries.append({
+                "type": "local",
+                "path": source_path,
+                "file_name": os.path.basename(source_file),
+                "folder": rel_folder.replace("\\", "/"),
+                "model": None,
+            })
+        return entries
+
+    def batch_download_dir_for_job(self, parent, model, target_w, target_h):
+        if not parent:
+            return None
+        if model:
+            model_name = model.get("model_name") or f"model_{model.get('id')}"
+        elif not self.is_db_uri(getattr(self, "project_dir", "")):
+            model_name = os.path.basename(self.project_dir) or "model"
+        else:
+            model_name = "model"
+        safe_model = re.sub(r"[^0-9A-Za-zА-Яа-я_\-.]+", "_", str(model_name)).strip("_") or "model"
+        folder_name = f"{safe_model}_{self.sanitize_filename_part(target_w)}_{self.sanitize_filename_part(target_h)}"
+        output_dir = os.path.join(parent, folder_name)
+        os.makedirs(output_dir, exist_ok=True)
+        return output_dir
+
+    def restore_batch_original_state(self, state):
+        self.dxf_path = state["dxf_path"]
+        self.current_project_file_id = state["project_file_id"]
+        self.current_door_model_id = state["door_model_id"]
+        self.selected_db_model_id = state["selected_db_model_id"]
+        self.current_db_file_name = state["db_file_name"]
+        self.current_db_file_folder = state["db_file_folder"]
+        self.project_dir = state["project_dir"]
+        self.doc = state["doc"]
+        self.project_meta = state["meta"]
+        self.parametric_groups = state["groups"]
+        self.block_keep_state = state["keep_state"]
+        self.save_original_geometries()
+
     def batch_export_from_table(self):
         self.collect_text_settings_from_inputs()
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Виберіть Excel/CSV для пакетного створення DXF",
-            self.project_dir,
+            self.project_dir if not self.is_db_uri(getattr(self, "project_dir", "")) else os.getcwd(),
             "Tables (*.xlsx *.csv);;All Files (*)"
         )
         if not path:
             return
 
-        original_dxf_path = self.dxf_path
-        original_bytes = None
-        if os.path.exists(self.dxf_path):
-            with open(self.dxf_path, "rb") as f:
-                original_bytes = f.read()
-        original_meta = copy.deepcopy(self.project_meta)
-        original_groups = copy.deepcopy(self.parametric_groups)
-        original_keep_state = copy.deepcopy(self.block_keep_state)
+        options = self.ask_batch_table_export_options()
+        if not options:
+            return
+
+        original_state = {
+            "project_dir": getattr(self, "project_dir", None),
+            "dxf_path": getattr(self, "dxf_path", None),
+            "project_file_id": getattr(self, "current_project_file_id", None),
+            "door_model_id": getattr(self, "current_door_model_id", None),
+            "selected_db_model_id": getattr(self, "selected_db_model_id", None),
+            "db_file_name": getattr(self, "current_db_file_name", None),
+            "db_file_folder": getattr(self, "current_db_file_folder", None),
+            "doc": copy.deepcopy(self.doc),
+            "meta": copy.deepcopy(self.project_meta),
+            "groups": copy.deepcopy(self.parametric_groups),
+            "keep_state": copy.deepcopy(self.block_keep_state),
+        }
 
         try:
             rows = self.read_xlsx_rows(path) if path.lower().endswith(".xlsx") else self.read_csv_rows(path)
             jobs = self.extract_batch_jobs(rows)
-            source_files = self.get_folder_source_dxf_files()
-            if not source_files:
-                source_files = [os.path.basename(self.dxf_path)]
+            if not jobs:
+                QMessageBox.information(self, "Пакет", "У таблиці немає рядків з параметрами.")
+                return
+
+            models = self.db.list_door_models() if getattr(self, "db", None) and getattr(self.db, "available", False) else []
             created = []
             skipped = 0
-            for job in jobs:
-                for source_file in source_files:
-                    source_path = os.path.join(self.project_dir, source_file)
-                    if not os.path.exists(source_path):
-                        continue
-                    with open(source_path, "rb") as f:
-                        source_bytes = f.read()
+            failed = []
 
-                    self.dxf_path = source_path
-                    self.current_project_file_id = None
-                    self.doc = ezdxf.readfile(self.dxf_path)
-                    self.load_project_config()
-                    self.save_original_geometries()
-                    self.apply_imported_parameters(job, refresh_ui=False, save_config=False)
-                    self.is_loading_history = True
-                    self.suppress_project_config_save = True
+            for row_index, job in enumerate(jobs, start=2):
+                model, model_error = self.resolve_batch_job_model(job, models)
+                if model_error:
+                    failed.append(f"рядок {row_index}: {model_error}")
+                    skipped += 1
+                    continue
+
+                source_entries = self.batch_source_entries_for_model(model)
+                if not source_entries:
+                    failed.append(f"рядок {row_index}: немає DXF для моделі")
+                    skipped += 1
+                    continue
+
+                for entry in source_entries:
+                    original_source_bytes = None
+                    project_file_id = None
                     try:
-                        ok_to_export = self.process_parametric_percentage_scale(save_result=True, record_history=False)
-                    finally:
-                        self.suppress_project_config_save = False
-                        self.is_loading_history = False
-                    if not ok_to_export:
-                        skipped += 1
-                        with open(source_path, "wb") as f:
-                            f.write(source_bytes)
-                        self.doc = ezdxf.readfile(self.dxf_path)
+                        if entry["type"] == "db":
+                            record = entry["record"]
+                            project_file_id = int(record.get("id"))
+                            original_source_bytes = self.db.get_project_file_binary(project_file_id)
+                            if not original_source_bytes:
+                                skipped += 1
+                                continue
+                            file_name = record.get("file_name") or f"project_file_{project_file_id}.dxf"
+                            if not file_name.lower().endswith(".dxf"):
+                                file_name = f"{file_name}.dxf"
+                            self.current_project_file_id = project_file_id
+                            self.current_door_model_id = record.get("door_model_id") or model.get("id")
+                            self.selected_db_model_id = self.current_door_model_id
+                            self.current_db_file_name = file_name
+                            self.current_db_file_folder = str(record.get("folder") or "")
+                            self.project_dir = f"db://door_model/{self.current_door_model_id or 'unknown'}"
+                            self.dxf_path = f"db://project_file/{project_file_id}/{file_name}"
+                            self.doc = self.read_dxf_doc_from_bytes(original_source_bytes)
+                            loaded = self.db.load_project_config(project_file_id=project_file_id)
+                            if loaded:
+                                self.apply_loaded_project_config(loaded)
+                            else:
+                                self.load_project_config()
+                        else:
+                            source_path = entry["path"]
+                            with open(source_path, "rb") as f:
+                                original_source_bytes = f.read()
+                            self.project_dir = original_state["project_dir"]
+                            self.dxf_path = source_path
+                            self.current_project_file_id = None
+                            self.current_db_file_name = None
+                            self.current_db_file_folder = None
+                            self.doc = ezdxf.readfile(self.dxf_path)
+                            self.load_project_config()
+
                         self.save_original_geometries()
-                        continue
+                        self.apply_imported_parameters(job, refresh_ui=False, save_config=False)
+                        target_w = self.project_meta.get("target_width")
+                        target_h = self.project_meta.get("target_height")
+                        if target_w is None or target_h is None:
+                            failed.append(f"рядок {row_index}: немає target_width/target_height")
+                            skipped += 1
+                            continue
 
-                    target_w = self.project_meta.get("target_width")
-                    target_h = self.project_meta.get("target_height")
-                    export_path = self.build_export_path(target_w, target_h)
-                    export_doc = copy.deepcopy(self.doc)
-                    export_msp = export_doc.modelspace()
-                    delete_handles = self.get_export_delete_handles()
-                    for hndl in delete_handles:
-                        if hndl in export_doc.entitydb:
-                            export_msp.delete_entity(export_doc.entitydb[hndl])
-                    self.apply_opening_to_export_doc(export_doc)
-                    export_doc.saveas(export_path)
-                    self.save_generated_project_config(export_path, target_w, target_h)
-                    self.save_export_to_db(export_path)
-                    created.append(os.path.basename(export_path))
+                        self.is_loading_history = True
+                        self.suppress_project_config_save = True
+                        try:
+                            ok_to_export = self.process_parametric_percentage_scale(save_result=True, record_history=False)
+                        finally:
+                            self.suppress_project_config_save = False
+                            self.is_loading_history = False
 
-                    with open(source_path, "wb") as f:
-                        f.write(source_bytes)
-                    self.doc = ezdxf.readfile(self.dxf_path)
-                    self.save_original_geometries()
+                        if not ok_to_export:
+                            skipped += 1
+                            continue
 
-            self.dxf_path = original_dxf_path
-            if os.path.exists(self.dxf_path):
-                self.doc = ezdxf.readfile(self.dxf_path)
-            self.project_meta = original_meta
-            self.parametric_groups = original_groups
-            self.block_keep_state = original_keep_state
-            self.save_project_config()
+                        export_doc = copy.deepcopy(self.doc)
+                        export_msp = export_doc.modelspace()
+                        for hndl in self.get_export_delete_handles():
+                            if hndl in export_doc.entitydb:
+                                export_msp.delete_entity(export_doc.entitydb[hndl])
+                        self.apply_opening_to_export_doc(export_doc)
+
+                        export_name = self.build_export_file_name(target_w, target_h)
+                        outputs = []
+                        if options["save_to_db"]:
+                            if self.save_export_doc_to_db(export_doc, export_name):
+                                outputs.append("БД")
+                        download_parent = options.get("download_parent")
+                        if download_parent:
+                            model_dir = self.batch_download_dir_for_job(download_parent, model, target_w, target_h)
+                            source_folder = str(entry.get("folder") or (entry.get("record") or {}).get("folder") or "")
+                            target_dir = os.path.join(model_dir, source_folder) if source_folder else model_dir
+                            os.makedirs(target_dir, exist_ok=True)
+                            saved_path = self.export_doc_to_path(export_doc, target_dir, export_name)
+                            outputs.append(os.path.basename(saved_path))
+
+                        model_label = (model or {}).get("model_name") or os.path.basename(self.project_dir) or "model"
+                        created.append(f"{model_label}: {export_name} ({', '.join(outputs)})")
+
+                    finally:
+                        if original_source_bytes is not None:
+                            if entry["type"] == "db" and project_file_id and getattr(self, "db", None):
+                                self.db.update_project_file_binary(project_file_id, original_source_bytes)
+                            elif entry["type"] == "local":
+                                with open(entry["path"], "wb") as f:
+                                    f.write(original_source_bytes)
+
+            self.restore_batch_original_state(original_state)
             self.scan_project_folder_for_dxf()
             self.update_dimension_inputs_from_meta()
             self.load_groups_into_list()
             self.load_entities_into_list()
             self.update_viewer()
+
+            if failed:
+                QMessageBox.warning(self, "Пакет", "Частину рядків пропущено:\n" + "\n".join(failed[:20]))
             if skipped:
                 self.lbl_status_calc.setText(
-                    f"<font color='#ff9800'>Пакет створено: {len(created)} DXF, пропущено через накладання: {skipped}</font>"
+                    f"<font color='#ff9800'>Пакет створено: {len(created)} DXF, пропущено: {skipped}</font>"
                 )
             else:
                 self.lbl_status_calc.setText(f"<font color='#a5d6a7'>Пакет створено: {len(created)} DXF</font>")
         except Exception as e:
+            self.restore_batch_original_state(original_state)
             self.lbl_status_calc.setText(f"<font color='red'>Помилка пакета: {e}</font>")
-            self.dxf_path = original_dxf_path
-            if original_bytes is not None:
-                with open(self.dxf_path, "wb") as f:
-                    f.write(original_bytes)
-                self.doc = ezdxf.readfile(self.dxf_path)
-                self.save_original_geometries()
 
     def extract_batch_jobs(self, rows):
         if not rows:

@@ -25,6 +25,8 @@ OPENING_KEYS = {
     "target_door_opening",
 }
 BLOCK_LIST_KEYS = {"keep_blocks", "delete_blocks"}
+MODEL_TEXT_KEYS = {"model", "model_name", "door_model", "model_folder", "folder_path"}
+MODEL_NUMERIC_KEYS = {"model_id", "door_model_id"}
 
 
 def normalize_key(value):
@@ -75,6 +77,22 @@ def normalize_key(value):
         "поворот тексту": "text_rotation",
         "text_rotation": "text_rotation",
         "rotation": "text_rotation",
+        "відкривання": "door_opening",
+        "початкове відкривання": "source_door_opening",
+        "стартове відкривання": "source_door_opening",
+        "цільове відкривання": "target_door_opening",
+        "нове відкривання": "target_door_opening",
+        "модель": "model",
+        "назва моделі": "model",
+        "model": "model",
+        "model_name": "model_name",
+        "door_model": "door_model",
+        "id моделі": "model_id",
+        "model_id": "model_id",
+        "door_model_id": "door_model_id",
+        "папка моделі": "model_folder",
+        "model_folder": "model_folder",
+        "folder_path": "folder_path",
     }
     return replacements.get(text, text)
 
@@ -135,6 +153,14 @@ def add_value(params, key, value, parse_numeric_text):
         num = parse_numeric_text(value)
         if num is not None:
             params[key] = num
+    elif key in MODEL_NUMERIC_KEYS:
+        num = parse_numeric_text(value)
+        if num is not None:
+            params[key] = int(num)
+    elif key in MODEL_TEXT_KEYS:
+        text_value = str(value).strip()
+        if text_value:
+            params[key] = text_value
     elif key in TEXT_KEYS:
         params[key] = str(value).strip()
     elif key in OPENING_KEYS:
