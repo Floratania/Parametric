@@ -14521,6 +14521,7 @@ class MiniCAD(QMainWindow):
             self.selected_db_model_id = None
             self.current_project_file_id = None
             self.current_db_file_name = None
+            self.current_db_file_folder = None
             self.dxf_path = os.path.join(self.project_dir if not self.is_db_uri(getattr(self, "project_dir", "")) else os.getcwd(), "drawing.DXF")
             self.doc = ezdxf.new()
             self.selected_handles.clear()

@@ -4109,6 +4109,8 @@ class ParametricDb:
                         file_id,
                     )
                     cur.execute("DELETE FROM dbo.ProjectGroups WHERE ProjectFileId = ?", file_id)
+                    if self.table_exists("ProjectTextSettings"):
+                        cur.execute("DELETE FROM dbo.ProjectTextSettings WHERE ProjectFileId = ?", file_id)
                     if self.table_exists("ProjectJsonBackups"):
                         cur.execute("DELETE FROM dbo.ProjectJsonBackups WHERE ProjectFileId = ?", file_id)
                     cur.execute("DELETE FROM dbo.ProjectExports WHERE SourceProjectFileId = ?", file_id)
