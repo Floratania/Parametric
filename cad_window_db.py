@@ -14475,6 +14475,65 @@ class MiniCAD(QMainWindow):
         self.update_file_status_panel()
         self.lbl_status_calc.setText("<font color='#a5d6a7'>Папку/файли прив'язано до вибраної моделі.</font>")
 
+    def delete_door_model_from_server(self):
+        if not getattr(self, "db", None) or not getattr(self.db, "available", False):
+            QMessageBox.warning(self, "Модель", "БД недоступна.")
+            return
+        if not self.admin_require():
+            return
+
+        model = self.pick_door_model("Видалити модель з сервера")
+        if not model:
+            return
+
+        model_id = int(model.get("id"))
+        model_name = model.get("model_name") or f"Model {model_id}"
+        file_count = int(model.get("file_count") or 0)
+        answer = QMessageBox.question(
+            self,
+            "Видалити модель",
+            (
+                f"Видалити модель '{model_name}' з сервера?\n\n"
+                f"Буде видалено модель, {file_count} DXF-файлів, групи та експорти цієї моделі."
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        confirm, ok = QInputDialog.getText(
+            self,
+            "Підтвердження видалення",
+            "Для підтвердження введіть DELETE:"
+        )
+        if not ok or confirm.strip().upper() != "DELETE":
+            return
+
+        if not self.db.delete_door_model(model_id):
+            QMessageBox.warning(self, "Модель", f"Не вдалося видалити модель:\n{self.db.last_error}")
+            return
+
+        if getattr(self, "current_door_model_id", None) == model_id:
+            self.current_door_model_id = None
+            self.selected_db_model_id = None
+            self.current_project_file_id = None
+            self.current_db_file_name = None
+            self.dxf_path = os.path.join(self.project_dir if not self.is_db_uri(getattr(self, "project_dir", "")) else os.getcwd(), "drawing.DXF")
+            self.doc = ezdxf.new()
+            self.selected_handles.clear()
+            self.parametric_groups.clear()
+            self.block_keep_state.clear()
+            self.save_original_geometries()
+            self.update_viewer()
+            self.load_entities_into_list()
+            self.load_groups_into_list()
+            self.load_block_filter_list()
+
+        self.scan_project_folder_for_dxf()
+        self.update_file_status_panel()
+        self.lbl_status_calc.setText(f"<font color='#a5d6a7'>Модель видалено з сервера: {model_name}</font>")
+
 
     def register_current_folder_model(self, show_errors=True):
         """One folder = one DoorModel. Register all DXF files in this folder under the same model."""
@@ -14954,6 +15013,9 @@ class MiniCAD(QMainWindow):
         self.btn_attach_folder_to_model = QPushButton("Папку до моделі")
         self.btn_attach_folder_to_model.clicked.connect(self.attach_current_folder_to_model)
         model_actions_box.addWidget(self.btn_attach_folder_to_model)
+        self.btn_delete_door_model = QPushButton("Видалити модель")
+        self.btn_delete_door_model.clicked.connect(self.delete_door_model_from_server)
+        model_actions_box.addWidget(self.btn_delete_door_model)
         control_panel_layout.addLayout(model_actions_box)
 
         self.side_tabs = QTabWidget()
@@ -17182,6 +17244,73 @@ class MiniCAD(QMainWindow):
         if self.process_parametric_percentage_scale(save_result=False, record_history=False):
             self.lbl_status_calc.setText("<font color='#4fc3f7'>Перегляд застосовано тільки на екрані. Файл ще не збережено.</font>")
 
+    def ask_model_export_options(self, target_w, target_h):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Створити комплект моделі")
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel(
+            f"Новий розмір: {self.format_dimension_value(target_w)} x {self.format_dimension_value(target_h)}"
+        ))
+        check_db = QCheckBox("Створити записи в БД")
+        check_db.setChecked(bool(getattr(self, "db", None) and getattr(self.db, "available", False)))
+        check_download = QCheckBox("Вивантажити папку на комп'ютер")
+        check_download.setChecked(False)
+        layout.addWidget(check_db)
+        layout.addWidget(check_download)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        if not check_db.isChecked() and not check_download.isChecked():
+            QMessageBox.information(self, "Комплект моделі", "Виберіть хоча б один варіант: БД або папка на комп'ютері.")
+            return None
+        return {
+            "save_to_db": check_db.isChecked(),
+            "download": check_download.isChecked(),
+        }
+
+    def make_download_output_dir(self, target_w, target_h):
+        parent = QFileDialog.getExistingDirectory(
+            self,
+            "Куди вивантажити папку з моделлю?",
+            self.project_dir if not self.is_db_uri(getattr(self, "project_dir", "")) else os.getcwd(),
+        )
+        if not parent:
+            return None
+        model_name = "model"
+        if getattr(self, "current_door_model_id", None) and getattr(self, "db", None):
+            model = self.db.load_door_model(self.current_door_model_id)
+            if model:
+                model_name = model.get("model_name") or model_name
+        elif not self.is_db_uri(getattr(self, "project_dir", "")):
+            model_name = os.path.basename(self.project_dir) or model_name
+        safe_model = re.sub(r"[^0-9A-Za-zА-Яа-я_\-.]+", "_", str(model_name)).strip("_") or "model"
+        folder_name = f"{safe_model}_{self.sanitize_filename_part(target_w)}_{self.sanitize_filename_part(target_h)}"
+        output_dir = os.path.join(parent, folder_name)
+        os.makedirs(output_dir, exist_ok=True)
+        return output_dir
+
+    def export_doc_to_path(self, export_doc, output_dir, export_name):
+        path = os.path.join(output_dir, export_name)
+        base, ext = os.path.splitext(export_name)
+        counter = 2
+        while os.path.exists(path):
+            path = os.path.join(output_dir, f"{base}_{counter}{ext or '.DXF'}")
+            counter += 1
+        export_doc.saveas(path)
+        return path
+
+    def db_model_source_records(self):
+        model_id = getattr(self, "current_door_model_id", None) or getattr(self, "selected_db_model_id", None)
+        if not model_id or not getattr(self, "db", None):
+            return []
+        return [
+            record for record in self.db.get_model_files(model_id)
+            if str(record.get("file_name") or "").lower().endswith(".dxf")
+        ]
+
     def restore_current_dxf_from_disk(self):
         if self.is_db_file_open():
             data = self.db.get_project_file_binary(self.current_project_file_id)
@@ -17293,22 +17422,6 @@ class MiniCAD(QMainWindow):
     def export_model_dxf_with_dimensions(self):
         """Export all source DXF files from the current folder/model with the same target size."""
         self.collect_text_settings_from_inputs()
-        self.register_current_folder_model(show_errors=False)
-
-        original_dxf_path = self.dxf_path
-        original_project_file_id = getattr(self, "current_project_file_id", None)
-        original_door_model_id = getattr(self, "current_door_model_id", None)
-        original_meta = copy.deepcopy(self.project_meta)
-        original_groups = copy.deepcopy(self.parametric_groups)
-        original_keep_state = copy.deepcopy(self.block_keep_state)
-        original_bytes = None
-        if os.path.exists(original_dxf_path):
-            with open(original_dxf_path, "rb") as f:
-                original_bytes = f.read()
-
-        source_files = self.get_folder_source_dxf_files()
-        if not source_files:
-            source_files = [os.path.basename(self.dxf_path)]
 
         target_w = self.parse_numeric_text(self.input_target_width.text())
         target_h = self.parse_numeric_text(self.input_target_height.text())
@@ -17318,21 +17431,82 @@ class MiniCAD(QMainWindow):
             self.lbl_status_calc.setText("<font color='red'>Вкажіть початкові та цільові W/H.</font>")
             return
 
+        options = self.ask_model_export_options(target_w, target_h)
+        if not options:
+            return
+
+        download_dir = None
+        if options["download"]:
+            download_dir = self.make_download_output_dir(target_w, target_h)
+            if not download_dir:
+                return
+
+        if options["save_to_db"] and not self.is_db_uri(getattr(self, "project_dir", "")):
+            self.register_current_folder_model(show_errors=False)
+
+        original_dxf_path = self.dxf_path
+        original_project_file_id = getattr(self, "current_project_file_id", None)
+        original_door_model_id = getattr(self, "current_door_model_id", None)
+        original_selected_db_model_id = getattr(self, "selected_db_model_id", None)
+        original_db_file_name = getattr(self, "current_db_file_name", None)
+        original_doc = copy.deepcopy(self.doc)
+        original_meta = copy.deepcopy(self.project_meta)
+        original_groups = copy.deepcopy(self.parametric_groups)
+        original_keep_state = copy.deepcopy(self.block_keep_state)
+
+        db_records = self.db_model_source_records() if self.is_db_uri(getattr(self, "project_dir", "")) else []
+        source_entries = []
+        if db_records:
+            for record in db_records:
+                source_entries.append({"type": "db", "record": record})
+        else:
+            source_files = self.get_folder_source_dxf_files()
+            if not source_files:
+                source_files = [os.path.basename(self.dxf_path)]
+            for source_file in source_files:
+                source_path = os.path.join(self.project_dir, source_file)
+                if os.path.exists(source_path):
+                    source_entries.append({"type": "local", "file_name": source_file, "path": source_path})
+
+        if not source_entries:
+            self.lbl_status_calc.setText("<font color='red'>Немає DXF-файлів для створення комплекту.</font>")
+            return
+
         created = []
         skipped = 0
         try:
-            for source_file in source_files:
-                source_path = os.path.join(self.project_dir, source_file)
-                if not os.path.exists(source_path):
-                    continue
-                with open(source_path, "rb") as f:
-                    source_bytes = f.read()
+            for entry in source_entries:
+                if entry["type"] == "db":
+                    record = entry["record"]
+                    project_file_id = int(record.get("id"))
+                    data = self.db.get_project_file_binary(project_file_id)
+                    if not data:
+                        skipped += 1
+                        continue
+                    file_name = record.get("file_name") or f"project_file_{project_file_id}.dxf"
+                    if not file_name.lower().endswith(".dxf"):
+                        file_name = f"{file_name}.dxf"
+                    self.current_project_file_id = project_file_id
+                    self.current_door_model_id = record.get("door_model_id") or original_door_model_id
+                    self.selected_db_model_id = self.current_door_model_id
+                    self.current_db_file_name = file_name
+                    self.project_dir = f"db://door_model/{self.current_door_model_id or 'unknown'}"
+                    self.dxf_path = f"db://project_file/{project_file_id}/{file_name}"
+                    self.doc = self.read_dxf_doc_from_bytes(data)
+                    loaded = self.db.load_project_config(project_file_id=project_file_id)
+                    if loaded:
+                        self.apply_loaded_project_config(loaded)
+                    else:
+                        self.load_project_config()
+                else:
+                    source_path = entry["path"]
+                    self.dxf_path = source_path
+                    self.current_db_file_name = None
+                    self.current_project_file_id = None
+                    self.current_door_model_id = original_door_model_id
+                    self.doc = ezdxf.readfile(self.dxf_path)
+                    self.load_project_config()
 
-                self.dxf_path = source_path
-                self.current_project_file_id = None
-                self.current_door_model_id = original_door_model_id
-                self.doc = ezdxf.readfile(self.dxf_path)
-                self.load_project_config()
                 self.save_original_geometries()
 
                 self.project_meta["source_width"] = source_w
@@ -17350,13 +17524,8 @@ class MiniCAD(QMainWindow):
 
                 if not ok_to_export:
                     skipped += 1
-                    with open(source_path, "wb") as f:
-                        f.write(source_bytes)
-                    self.doc = ezdxf.readfile(self.dxf_path)
-                    self.save_original_geometries()
                     continue
 
-                export_path = self.build_export_path(target_w, target_h)
                 export_doc = copy.deepcopy(self.doc)
                 export_msp = export_doc.modelspace()
                 for hndl in self.get_export_delete_handles():
@@ -17364,50 +17533,54 @@ class MiniCAD(QMainWindow):
                         export_msp.delete_entity(export_doc.entitydb[hndl])
 
                 self.apply_opening_to_export_doc(export_doc)
-                export_doc.saveas(export_path)
-                self.save_generated_project_config(export_path, target_w, target_h)
-                self.save_export_to_db(export_path)
-                created.append(os.path.basename(export_path))
-
-                with open(source_path, "wb") as f:
-                    f.write(source_bytes)
-                self.doc = ezdxf.readfile(self.dxf_path)
-                self.save_original_geometries()
+                export_name = self.build_export_file_name(target_w, target_h)
+                outputs = []
+                if options["save_to_db"]:
+                    if self.save_export_doc_to_db(export_doc, export_name):
+                        outputs.append("БД")
+                if download_dir:
+                    saved_path = self.export_doc_to_path(export_doc, download_dir, export_name)
+                    outputs.append(os.path.basename(saved_path))
+                created.append(f"{export_name} ({', '.join(outputs)})" if outputs else export_name)
 
             self.dxf_path = original_dxf_path
             self.current_project_file_id = original_project_file_id
             self.current_door_model_id = original_door_model_id
-            if os.path.exists(self.dxf_path):
-                if original_bytes is not None:
-                    with open(self.dxf_path, "wb") as f:
-                        f.write(original_bytes)
-                self.doc = ezdxf.readfile(self.dxf_path)
+            self.selected_db_model_id = original_selected_db_model_id
+            self.current_db_file_name = original_db_file_name
+            self.doc = original_doc
             self.project_meta = original_meta
             self.parametric_groups = original_groups
             self.block_keep_state = original_keep_state
             self.save_original_geometries()
-            self.save_project_config()
+            if getattr(self, "current_user", None):
+                self.save_project_config()
             self.scan_project_folder_for_dxf()
             self.update_dimension_inputs_from_meta()
             self.load_groups_into_list()
             self.load_entities_into_list()
             self.update_viewer()
+            where = []
+            if options["save_to_db"]:
+                where.append("БД")
+            if download_dir:
+                where.append(download_dir)
+            suffix = f" → {' + '.join(where)}" if where else ""
             if skipped:
-                self.lbl_status_calc.setText(f"<font color='#ff9800'>Комплект створено: {len(created)} DXF, пропущено: {skipped}</font>")
+                self.lbl_status_calc.setText(f"<font color='#ff9800'>Комплект створено: {len(created)} DXF{suffix}, пропущено: {skipped}</font>")
             else:
-                self.lbl_status_calc.setText(f"<font color='#a5d6a7'>Комплект створено: {len(created)} DXF</font>")
+                self.lbl_status_calc.setText(f"<font color='#a5d6a7'>Комплект створено: {len(created)} DXF{suffix}</font>")
         except Exception as e:
             self.dxf_path = original_dxf_path
             self.current_project_file_id = original_project_file_id
             self.current_door_model_id = original_door_model_id
-            if original_bytes is not None and os.path.exists(self.dxf_path):
-                with open(self.dxf_path, "wb") as f:
-                    f.write(original_bytes)
-                self.doc = ezdxf.readfile(self.dxf_path)
-                self.save_original_geometries()
+            self.selected_db_model_id = original_selected_db_model_id
+            self.current_db_file_name = original_db_file_name
+            self.doc = original_doc
             self.project_meta = original_meta
             self.parametric_groups = original_groups
             self.block_keep_state = original_keep_state
+            self.save_original_geometries()
             self.lbl_status_calc.setText(f"<font color='red'>Помилка експорту комплекту: {e}</font>")
 
     def batch_export_from_table(self):

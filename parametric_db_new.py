@@ -3990,6 +3990,36 @@ class ParametricDb:
             self.last_error = str(exc)
             return False
 
+    def delete_door_model(self, door_model_id: int) -> bool:
+        """Delete a door model and all DB records that belong to it."""
+        try:
+            with self.connect() as conn:
+                cur = conn.cursor()
+                file_rows = cur.execute(
+                    "SELECT Id FROM dbo.ProjectFiles WHERE DoorModelId = ?",
+                    door_model_id,
+                ).fetchall()
+                file_ids = [int(row.Id) for row in file_rows]
+
+                for file_id in file_ids:
+                    cur.execute(
+                        "DELETE FROM dbo.ProjectGroupEntities WHERE ProjectGroupId IN (SELECT Id FROM dbo.ProjectGroups WHERE ProjectFileId = ?)",
+                        file_id,
+                    )
+                    cur.execute("DELETE FROM dbo.ProjectGroups WHERE ProjectFileId = ?", file_id)
+                    if self.table_exists("ProjectJsonBackups"):
+                        cur.execute("DELETE FROM dbo.ProjectJsonBackups WHERE ProjectFileId = ?", file_id)
+                    cur.execute("DELETE FROM dbo.ProjectExports WHERE SourceProjectFileId = ?", file_id)
+
+                cur.execute("DELETE FROM dbo.ProjectExports WHERE DoorModelId = ?", door_model_id)
+                cur.execute("DELETE FROM dbo.ProjectFiles WHERE DoorModelId = ?", door_model_id)
+                cur.execute("DELETE FROM dbo.DoorModels WHERE Id = ?", door_model_id)
+                conn.commit()
+            return True
+        except Exception as exc:
+            self.last_error = str(exc)
+            return False
+
     def load_door_model(self, door_model_id: int) -> Optional[Dict[str, Any]]:
         try:
             with self.connect() as conn:
