@@ -16234,6 +16234,7 @@ class MiniCAD(QMainWindow):
 
     def group_name_suggestions(self):
         names = []
+        names.extend(group.get("name") for group in self.parametric_groups)
         if getattr(self, "db", None) and getattr(self.db, "available", False):
             names.extend(self.db.list_group_name_suggestions())
         names.extend(["Полотно", "Бокова стійка", "Перемичка", "Підсилювач", "Поріг"])
@@ -16249,20 +16250,32 @@ class MiniCAD(QMainWindow):
 
     def ask_group_name(self):
         suggestions = self.group_name_suggestions()
-        if suggestions:
-            name, ok = QInputDialog.getItem(
+        manual_label = "Ввести назву вручну..."
+        choice, ok = QInputDialog.getItem(
+            self,
+            "Нова група",
+            "Виберіть назву групи:",
+            [manual_label, *suggestions],
+            0,
+            False,
+        )
+        if not ok:
+            return None
+        if choice == manual_label:
+            name, manual_ok = QInputDialog.getText(
                 self,
                 "Нова група",
-                "Виберіть або введіть назву групи:",
-                suggestions,
-                0,
-                True,
+                "Введіть назву групи:",
             )
+            if not manual_ok:
+                return None
         else:
-            name, ok = QInputDialog.getText(self, "Нова група", "Введіть назву групи:")
-        if not ok or not str(name).strip():
-            return f"Група {len(self.parametric_groups) + 1}"
-        return str(name).strip()
+            name = choice
+        name = str(name or "").strip()
+        if not name:
+            QMessageBox.warning(self, "Нова група", "Назва групи не може бути порожньою.")
+            return None
+        return name
 
     def apply_rule_to_group(self, group, rule_name):
         rule = self.rule_library().get(rule_name)
@@ -19198,6 +19211,8 @@ class MiniCAD(QMainWindow):
             return  
 
         name = self.ask_group_name()
+        if not name:
+            return
         self.record_action_snapshot()
 
         for group in self.parametric_groups:
