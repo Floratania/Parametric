@@ -3831,27 +3831,74 @@ class ParametricDb:
 
     def list_group_name_suggestions(self) -> List[str]:
         try:
-            names = set()
             with self.connect() as conn:
-                cur = conn.cursor()
-                for row in cur.execute("SELECT DISTINCT Name FROM dbo.ProjectGroups WHERE Name IS NOT NULL AND LTRIM(RTRIM(Name)) <> ''"):
-                    names.add(str(row.Name).strip())
-                for row in cur.execute("SELECT Name FROM dbo.RuleTemplates WHERE IsActive = 1 AND Name IS NOT NULL AND LTRIM(RTRIM(Name)) <> ''"):
-                    names.add(str(row.Name).strip())
-            return sorted(names, key=str.lower)
+                rows = conn.cursor().execute(
+                    """
+                    SELECT Name
+                    FROM dbo.GroupNameTemplates
+                    WHERE IsActive = 1
+                      AND Name IS NOT NULL
+                      AND LTRIM(RTRIM(Name)) <> ''
+                    ORDER BY COALESCE(SortOrder, 2147483647), Name
+                    """
+                ).fetchall()
+            return [str(row.Name).strip() for row in rows]
         except Exception as exc:
             self.last_error = str(exc)
             return []
 
     def add_group_name_template(self, name: str, user_id: int) -> Optional[int]:
-        rule = {
-            "k_w": 0.0, "k_h": 0.0,
-            "growth_p_w": 0.0, "growth_p_h": 0.0,
-            "growth_dir_x": "Центр", "growth_dir_y": "Центр",
-            "shift_dir_x": "Вправо", "shift_dir_y": "Вгору",
-            "link_x": "X = W", "link_y": "Y = H",
-        }
-        return self.save_rule_template(name, "Назва групи / порожній шаблон", rule, user_id, is_system=False, is_active=True)
+        name = str(name or "").strip()
+        if not name:
+            self.last_error = "Назва групи порожня."
+            return None
+        try:
+            with self.connect() as conn:
+                cur = conn.cursor()
+                existing_id = self._scalar(
+                    cur,
+                    """
+                    SELECT TOP 1 Id
+                    FROM dbo.GroupNameTemplates
+                    WHERE LOWER(LTRIM(RTRIM(Name))) = LOWER(?)
+                    ORDER BY Id
+                    """,
+                    name,
+                )
+                if existing_id is not None:
+                    cur.execute(
+                        """
+                        UPDATE dbo.GroupNameTemplates
+                        SET Name = ?, IsActive = 1
+                        WHERE Id = ?
+                        """,
+                        name,
+                        existing_id,
+                    )
+                    template_id = int(existing_id)
+                else:
+                    next_sort_order = self._scalar(
+                        cur,
+                        "SELECT COALESCE(MAX(SortOrder), 0) + 10 FROM dbo.GroupNameTemplates",
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO dbo.GroupNameTemplates
+                        (Name, Description, SortOrder, IsActive, CreatedByUserId, CreatedAt)
+                        OUTPUT INSERTED.Id
+                        VALUES (?, ?, ?, 1, ?, SYSDATETIME())
+                        """,
+                        name,
+                        "Типова назва параметричної групи",
+                        int(next_sort_order or 10),
+                        user_id,
+                    )
+                    template_id = int(cur.fetchone()[0])
+                conn.commit()
+                return template_id
+        except Exception as exc:
+            self.last_error = str(exc)
+            return None
 
     # ============================================================
     # DOOR MODEL

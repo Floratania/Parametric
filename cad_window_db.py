@@ -16234,10 +16234,8 @@ class MiniCAD(QMainWindow):
 
     def group_name_suggestions(self):
         names = []
-        names.extend(group.get("name") for group in self.parametric_groups)
         if getattr(self, "db", None) and getattr(self.db, "available", False):
-            names.extend(self.db.list_group_name_suggestions())
-        names.extend(["Полотно", "Бокова стійка", "Перемичка", "Підсилювач", "Поріг"])
+            names = self.db.list_group_name_suggestions()
         result = []
         seen = set()
         for name in names:
