@@ -3491,7 +3491,28 @@ class ParametricDb:
                 "full_name": row.get("FullName"),
                 "is_admin": is_admin,
                 "role": role or ("admin" if is_admin else "user"),
+                "theme": row.get("Theme") or "dark",
             }
+
+    def update_user_theme(self, user_id: int, theme: str) -> bool:
+        theme = str(theme or "dark").strip().lower()
+        if theme not in ("dark", "light"):
+            theme = "dark"
+        try:
+            if "Theme" not in self.table_columns("Users"):
+                self.last_error = "У таблиці Users немає поля Theme."
+                return False
+            with self.connect() as conn:
+                conn.cursor().execute(
+                    "UPDATE dbo.Users SET Theme = ? WHERE Id = ?",
+                    theme,
+                    int(user_id),
+                )
+                conn.commit()
+            return True
+        except Exception as exc:
+            self.last_error = str(exc)
+            return False
 
     def list_users(self) -> List[Dict[str, Any]]:
         try:

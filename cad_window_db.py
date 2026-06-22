@@ -13809,6 +13809,12 @@ class MiniCAD(QMainWindow):
 
             if user:
                 self.current_user = user
+                self.current_theme = self.theme_display_name(user.get("theme"))
+                if hasattr(self, "theme_combo"):
+                    self.theme_combo.blockSignals(True)
+                    self.theme_combo.setCurrentText(self.current_theme)
+                    self.theme_combo.blockSignals(False)
+                self.set_interface_theme(self.current_theme)
                 self.setWindowTitle(f"{self.windowTitle()} | {user.get('username')}")
                 if hasattr(self, "lbl_status_calc"):
                     self.lbl_status_calc.setText(
@@ -22071,7 +22077,92 @@ class MiniCAD(QMainWindow):
             self.zones_undo_stack.append(next_snapshot)
             self.restore_state_snapshot(next_snapshot)
 
+    @staticmethod
+    def theme_display_name(theme_value):
+        value = str(theme_value or "dark").strip().lower()
+        return "Світла" if value in ("light", "світла", "light_theme") else "Темна"
+
+    @staticmethod
+    def theme_storage_name(theme_name):
+        return "light" if MiniCAD.theme_display_name(theme_name) == "Світла" else "dark"
+
     def set_interface_theme(self, theme_name):
+        is_dark = self.theme_display_name(theme_name) == "Темна"
+        colors = {
+            "window": "#202124" if is_dark else "#f3f5f7",
+            "surface": "#292a2d" if is_dark else "#ffffff",
+            "surface_alt": "#323337" if is_dark else "#f7f8fa",
+            "border": "#484a4f" if is_dark else "#d5dbe3",
+            "text": "#eceff1" if is_dark else "#20252b",
+            "muted": "#aeb4bc" if is_dark else "#66717d",
+            "accent": "#4c9aff" if is_dark else "#1769aa",
+            "selection": "#185f9e" if is_dark else "#d8ebfb",
+            "disabled": "#70747a" if is_dark else "#9aa3ad",
+        }
+        self.setStyleSheet("""
+            QMainWindow, QDialog { background: %(window)s; }
+            QWidget { color: %(text)s; font-family: "Segoe UI"; font-size: 12px; }
+            QScrollArea, QAbstractScrollArea { border: none; background: transparent; }
+            QTabWidget::pane { background: %(surface)s; border: 1px solid %(border)s; top: -1px; }
+            QTabBar::tab {
+                background: %(surface_alt)s; color: %(muted)s; border: 1px solid %(border)s;
+                border-bottom: none; padding: 8px 14px; min-width: 64px;
+            }
+            QTabBar::tab:hover { color: %(text)s; background: %(surface)s; }
+            QTabBar::tab:selected {
+                color: %(text)s; background: %(surface)s; font-weight: 600;
+                border-bottom: 2px solid %(accent)s;
+            }
+            QGroupBox {
+                background: %(surface)s; border: 1px solid %(border)s; border-radius: 6px;
+                margin-top: 14px; padding: 14px 8px 8px 8px; font-weight: 600;
+            }
+            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: %(text)s; }
+            QPushButton {
+                background: %(surface_alt)s; color: %(text)s; border: 1px solid %(border)s;
+                border-radius: 4px; padding: 6px 10px; min-height: 18px;
+            }
+            QPushButton:hover, QPushButton:focus { background: %(surface)s; border-color: %(accent)s; }
+            QPushButton:pressed { background: %(selection)s; }
+            QPushButton:disabled { color: %(disabled)s; background: %(window)s; border-color: %(border)s; }
+            QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox, QDoubleSpinBox {
+                background: %(surface)s; color: %(text)s; border: 1px solid %(border)s;
+                border-radius: 4px; padding: 5px 7px; selection-background-color: %(selection)s;
+            }
+            QLineEdit:focus, QTextEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
+                border-color: %(accent)s;
+            }
+            QComboBox QAbstractItemView { background: %(surface)s; color: %(text)s; border: 1px solid %(border)s; }
+            QListWidget, QTreeWidget, QTableWidget {
+                background: %(surface)s; alternate-background-color: %(surface_alt)s;
+                color: %(text)s; border: 1px solid %(border)s; border-radius: 4px;
+                selection-background-color: %(selection)s;
+            }
+            QHeaderView::section {
+                background: %(surface_alt)s; color: %(text)s; border: none;
+                border-right: 1px solid %(border)s; border-bottom: 1px solid %(border)s;
+                padding: 6px; font-weight: 600;
+            }
+            QCheckBox { spacing: 7px; }
+            QCheckBox::indicator, QGroupBox::indicator {
+                width: 16px; height: 16px; border: 1px solid %(border)s;
+                border-radius: 3px; background: %(surface)s;
+            }
+            QCheckBox::indicator:hover, QGroupBox::indicator:hover { border-color: %(accent)s; }
+            QCheckBox::indicator:checked, QGroupBox::indicator:checked {
+                border-color: %(accent)s; background: %(accent)s;
+            }
+            QScrollBar:vertical { background: %(window)s; width: 11px; margin: 0; }
+            QScrollBar:horizontal { background: %(window)s; height: 11px; margin: 0; }
+            QScrollBar::handle { background: %(border)s; border-radius: 4px; min-height: 24px; min-width: 24px; }
+            QScrollBar::handle:hover { background: %(muted)s; }
+            QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
+            QToolTip { background: %(surface)s; color: %(text)s; border: 1px solid %(border)s; padding: 4px; }
+            QSplitter::handle { background: %(border)s; }
+        """ % colors)
+        self.apply_theme_widget_overrides(is_dark)
+
+    def _set_interface_theme_legacy(self, theme_name):
         is_dark = theme_name == "Темна"
         if is_dark:
             self.setStyleSheet("""
@@ -22339,8 +22430,8 @@ class MiniCAD(QMainWindow):
                 "background-color: #2e7d32; color: white; border: 1px solid #1f5d23; font-weight: bold; padding: 6px;"
             ),
             "btn_create_group": (
-                "background-color: #673ab7; color: white; font-weight: bold;",
-                "background-color: #ede7f6; color: #4527a0; border: 1px solid #b39ddb; font-weight: bold;"
+                "background-color: #185f9e; color: white; border: 1px solid #4c9aff; font-weight: bold;",
+                "background-color: #e7f2fb; color: #0f5b96; border: 1px solid #8ab7d8; font-weight: bold;"
             ),
             "btn_delete_from_dxf": (
                 "background-color: #d32f2f; color: white; font-weight: bold;",
@@ -22651,9 +22742,16 @@ class MiniCAD(QMainWindow):
         self.entity_list.blockSignals(False)
 
     def on_theme_changed(self, theme_name):
-        self.current_theme = theme_name
-        self.set_interface_theme(theme_name)
+        self.current_theme = self.theme_display_name(theme_name)
+        self.set_interface_theme(self.current_theme)
         self.update_viewer()
+        if getattr(self, "current_user", None) and self.current_user_id():
+            stored_theme = self.theme_storage_name(self.current_theme)
+            if self.current_user.get("theme") != stored_theme:
+                if self.db.update_user_theme(self.current_user_id(), stored_theme):
+                    self.current_user["theme"] = stored_theme
+                elif hasattr(self, "lbl_status_calc"):
+                    self.lbl_status_calc.setText(f"Не вдалося зберегти тему: {self.db.last_error}")
 
     def load_entities_into_list(self):
         self.entity_list.blockSignals(True)
