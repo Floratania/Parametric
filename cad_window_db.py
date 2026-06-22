@@ -13397,6 +13397,7 @@ import csv
 import re
 import shutil
 import tempfile
+import uuid
 import zipfile
 import xml.etree.ElementTree as ET
 from PySide6.QtGui import QShortcut, QKeySequence
@@ -14640,7 +14641,11 @@ class MiniCAD(QMainWindow):
             return
 
         source_folder = model_data.get("folder_path") or f"DoorModel_{source_model_id}"
-        opposite_folder_key = f"{source_folder}__opposite_{target_opening}"
+        # A generated opposite opening is always a separate model, even when one
+        # was generated from the same source before.
+        opposite_folder_key = (
+            f"{source_folder}__opposite_{target_opening}_{uuid.uuid4().hex}"
+        )
         opposite_meta = copy.deepcopy(source_meta)
         opposite_meta["source_door_opening"] = target_opening
         opposite_meta["target_door_opening"] = target_opening
@@ -14673,18 +14678,24 @@ class MiniCAD(QMainWindow):
         }
         temp_root = tempfile.mkdtemp(prefix="parametric_opposite_")
         created = []
-        skipped = 0
+        source_records = [
+            record
+            for record in self.db.get_model_files(source_model_id)
+            if str(record.get("file_name") or "").lower().endswith(".dxf")
+        ]
 
         try:
-            for record in self.db.get_model_files(source_model_id):
+            if not source_records:
+                raise RuntimeError("У вихідній моделі немає DXF-файлів.")
+
+            for record in source_records:
                 file_name = record.get("file_name") or f"project_file_{record.get('id')}.dxf"
-                if not str(file_name).lower().endswith(".dxf"):
-                    continue
                 project_file_id = int(record.get("id"))
                 data = self.db.get_project_file_binary(project_file_id)
                 if not data:
-                    skipped += 1
-                    continue
+                    raise RuntimeError(
+                        f"Файл '{file_name}' не має DXF-даних у БД. Модель не створено."
+                    )
 
                 self.current_project_file_id = project_file_id
                 self.current_door_model_id = source_model_id
@@ -14696,17 +14707,20 @@ class MiniCAD(QMainWindow):
                 self.doc = self.read_dxf_doc_from_bytes(data)
 
                 loaded = self.db.load_project_config(project_file_id=project_file_id)
-                if loaded:
-                    self.apply_loaded_project_config(loaded)
-                else:
-                    self.load_project_config()
+                if not loaded:
+                    raise RuntimeError(
+                        f"Не вдалося завантажити групи та налаштування '{file_name}': "
+                        f"{self.db.last_error}"
+                    )
+                self.apply_loaded_project_config(loaded)
 
                 target_meta = copy.deepcopy(self.project_meta)
                 mirrored_doc = copy.deepcopy(self.doc)
                 mirror_info = self.mirror_doc_by_width_axis_for_opposite(mirrored_doc, target_meta)
                 if mirror_info is None:
-                    skipped += 1
-                    continue
+                    raise RuntimeError(
+                        f"Не вдалося визначити вісь ширини для '{file_name}'. Модель не створено."
+                    )
                 axis_value, mirror_by_y = mirror_info
 
                 target_meta["source_door_opening"] = target_opening
@@ -14736,18 +14750,32 @@ class MiniCAD(QMainWindow):
                     folder_override=source_folder_name,
                 )
                 if not saved_project_file_id:
-                    skipped += 1
-                    continue
+                    raise RuntimeError(
+                        f"Не вдалося зберегти '{file_name}' у нову модель: {self.db.last_error}"
+                    )
 
                 target_dir = os.path.join(temp_root, self.sanitize_model_name(target_name), source_folder_name) if source_folder_name else os.path.join(temp_root, self.sanitize_model_name(target_name))
                 os.makedirs(target_dir, exist_ok=True)
                 saved_path = self.export_doc_to_path(mirrored_doc, target_dir, file_name)
                 created.append(os.path.basename(saved_path))
 
-            if not created:
-                raise RuntimeError("Не створено жодного DXF для протилежного відкривання.")
+            if len(created) != len(source_records):
+                raise RuntimeError(
+                    f"Створено лише {len(created)} з {len(source_records)} DXF. "
+                    "Неповну модель буде видалено."
+                )
 
             self.zip_directory(temp_root, zip_path)
+            with zipfile.ZipFile(zip_path, "r") as archive:
+                archived_dxf = [
+                    name for name in archive.namelist()
+                    if name.lower().endswith(".dxf") and not name.endswith("/")
+                ]
+            if len(archived_dxf) != len(source_records):
+                raise RuntimeError(
+                    f"ZIP містить {len(archived_dxf)} з {len(source_records)} DXF. "
+                    "Неповний архів і модель буде видалено."
+                )
             shutil.rmtree(temp_root, ignore_errors=True)
             self.restore_batch_original_state(original_state)
             self.current_door_model_id = target_model_id
@@ -14761,12 +14789,16 @@ class MiniCAD(QMainWindow):
             self.lbl_status_calc.setText(
                 f"<font color='#a5d6a7'>Створено протилежне відкривання: модель {target_model_id}, DXF: {len(created)}, ZIP: {zip_path}</font>"
             )
-            if skipped:
-                QMessageBox.information(self, "Протилежне відкривання", f"Створено {len(created)} DXF, пропущено {skipped}.")
-
         except Exception as exc:
             shutil.rmtree(temp_root, ignore_errors=True)
             self.restore_batch_original_state(original_state)
+            if zip_path and os.path.exists(zip_path):
+                try:
+                    os.remove(zip_path)
+                except OSError:
+                    pass
+            if target_model_id:
+                self.db.delete_door_model(target_model_id)
             QMessageBox.warning(self, "Протилежне відкривання", f"Не вдалося створити протилежне відкривання:\n{exc}")
 
     def create_model_copy_from_current_settings(self):
@@ -22100,7 +22132,9 @@ class MiniCAD(QMainWindow):
             "disabled": "#70747a" if is_dark else "#9aa3ad",
         }
         self.setStyleSheet("""
-            QMainWindow, QDialog { background: %(window)s; }
+            QMainWindow, QDialog, #MiniCADShell { background: %(window)s; }
+            #folderHost, #sideHost { background: %(surface)s; border: 1px solid %(border)s; }
+            #viewHost { background: %(window)s; border: none; }
             QWidget { color: %(text)s; font-family: "Segoe UI"; font-size: 12px; }
             QScrollArea, QAbstractScrollArea { border: none; background: transparent; }
             QTabWidget::pane { background: %(surface)s; border: 1px solid %(border)s; top: -1px; }
@@ -22160,6 +22194,14 @@ class MiniCAD(QMainWindow):
             QToolTip { background: %(surface)s; color: %(text)s; border: 1px solid %(border)s; padding: 4px; }
             QSplitter::handle { background: %(border)s; }
         """ % colors)
+        canvas_color = QColor("#1e1e1e" if is_dark else "#ffffff")
+        if hasattr(self, "view"):
+            self.view.setBackgroundBrush(QBrush(canvas_color))
+            self.view.viewport().setStyleSheet(
+                f"background-color: {canvas_color.name()}; border: none;"
+            )
+        if hasattr(self, "scene"):
+            self.scene.setBackgroundBrush(QBrush(canvas_color))
         self.apply_theme_widget_overrides(is_dark)
 
     def _set_interface_theme_legacy(self, theme_name):
