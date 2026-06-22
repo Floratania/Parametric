@@ -18349,109 +18349,213 @@ class MiniCAD(QMainWindow):
         self.load_entities_into_list()
         self.lbl_status_calc.setText("<font color='#a5d6a7'>Повернуто стан з відкритого DXF.</font>")
 
+
+    def iter_model_dxf_files(self):
+        """Повертає всі DXF файли з папки поточної моделі разом із підпапками."""
+        root_dir = getattr(self, "project_dir", None)
+        if not root_dir or not os.path.isdir(root_dir):
+            return []
+
+        result = []
+        for dirpath, _, filenames in os.walk(root_dir):
+            for filename in filenames:
+                if filename.lower().endswith(".dxf"):
+                    full_path = os.path.join(dirpath, filename)
+                    result.append(full_path)
+
+        return result
+
+
+    def export_one_dxf_file_to_folder(self, source_path, output_root, target_w, target_h):
+        """
+        Відкриває один DXF, застосовує параметричний перерахунок
+        і зберігає у output_root з тією ж структурою підпапок.
+        """
+        old_dxf_path = self.dxf_path
+        old_doc = self.doc
+        old_meta = copy.deepcopy(self.project_meta)
+        old_groups = copy.deepcopy(self.parametric_groups)
+        old_keep_state = copy.deepcopy(self.block_keep_state)
+
+        try:
+            self.dxf_path = source_path
+            self.doc = ezdxf.readfile(source_path)
+
+            self.load_project_config()
+            self.save_original_geometries()
+
+            self.project_meta["source_width"] = self.parse_numeric_text(self.input_current_width.text())
+            self.project_meta["source_height"] = self.parse_numeric_text(self.input_current_height.text())
+            self.project_meta["target_width"] = target_w
+            self.project_meta["target_height"] = target_h
+
+            self.is_loading_history = True
+            self.suppress_project_config_save = True
+
+            try:
+                ok = self.process_parametric_percentage_scale(
+                    save_result=True,
+                    record_history=False
+                )
+            finally:
+                self.suppress_project_config_save = False
+                self.is_loading_history = False
+
+            if not ok:
+                return False
+
+            export_doc = copy.deepcopy(self.doc)
+            export_msp = export_doc.modelspace()
+
+            delete_handles = set()
+            for group in self.parametric_groups:
+                key = self.get_group_key(group)
+                if not self.block_keep_state.get(key, True):
+                    delete_handles.update(group.get("handles", set()))
+
+            for hndl in list(delete_handles):
+                if hndl in export_doc.entitydb:
+                    export_msp.delete_entity(export_doc.entitydb[hndl])
+
+            self.apply_opening_to_export_doc(export_doc)
+
+            rel_dir = os.path.relpath(os.path.dirname(source_path), self.project_dir)
+            if rel_dir == ".":
+                rel_dir = ""
+
+            target_dir = os.path.join(output_root, rel_dir)
+            os.makedirs(target_dir, exist_ok=True)
+
+            base_name = os.path.splitext(os.path.basename(source_path))[0]
+            export_name = (
+                f"{base_name}_"
+                f"{self.sanitize_filename_part(target_w)}_"
+                f"{self.sanitize_filename_part(target_h)}.dxf"
+            )
+
+            export_path = os.path.join(target_dir, export_name)
+            export_doc.saveas(export_path)
+
+            return True
+
+        finally:
+            self.dxf_path = old_dxf_path
+            self.doc = old_doc
+            self.project_meta = old_meta
+            self.parametric_groups = old_groups
+            self.block_keep_state = old_keep_state
+
     def export_new_dxf_with_dimensions(self):
         self.collect_text_settings_from_inputs()
+
         original_dxf_path = self.dxf_path
-        original_bytes = None
-        original_doc = copy.deepcopy(self.doc) if self.is_db_file_open() else None
-        if not self.is_db_file_open() and os.path.exists(self.dxf_path):
-            with open(self.dxf_path, "rb") as f:
-                original_bytes = f.read()
+        original_doc = copy.deepcopy(self.doc)
         original_meta = copy.deepcopy(self.project_meta)
         original_groups = copy.deepcopy(self.parametric_groups)
         original_keep_state = copy.deepcopy(self.block_keep_state)
 
-        self.project_meta["source_width"] = self.parse_numeric_text(self.input_current_width.text())
-        self.project_meta["source_height"] = self.parse_numeric_text(self.input_current_height.text())
-        self.project_meta["target_width"] = self.parse_numeric_text(self.input_target_width.text())
-        self.project_meta["target_height"] = self.parse_numeric_text(self.input_target_height.text())
-        self.is_loading_history = True
-        self.suppress_project_config_save = True
-        try:
-            ok_to_export = self.process_parametric_percentage_scale(save_result=True, record_history=False)
-        finally:
-            self.suppress_project_config_save = False
-            self.is_loading_history = False
-        if not ok_to_export:
-            if original_doc is not None:
-                self.doc = original_doc
-                self.save_current_dxf()
-                self.save_original_geometries()
-            if original_bytes is not None:
-                with open(self.dxf_path, "wb") as f:
-                    f.write(original_bytes)
-                self.doc = ezdxf.readfile(self.dxf_path)
-                self.save_original_geometries()
-            self.project_meta = original_meta
-            self.parametric_groups = original_groups
-            self.block_keep_state = original_keep_state
-            self.update_dimension_inputs_from_meta()
-            self.load_groups_into_list()
-            self.load_entities_into_list()
-            self.update_viewer()
+        target_w = self.parse_numeric_text(self.input_target_width.text())
+        target_h = self.parse_numeric_text(self.input_target_height.text())
+
+        export_mode = self.ask_zip_export_mode()
+        if not export_mode:
             return
 
-        target_w = self.project_meta.get("target_width")
-        target_h = self.project_meta.get("target_height")
+
+        if export_mode == "original":
+            self.export_model_zip_from_db_without_changes()
+            return
+
+        if export_mode == "changed":
+            self.export_model_zip_from_db_with_changes()
+            return
+
+        if target_w is None or target_h is None:
+            self.lbl_status_calc.setText(
+                "<font color='red'>Вкажіть цільові ширину та висоту.</font>"
+            )
+            return
+
+        dxf_files = self.iter_model_dxf_files()
+
+        if not dxf_files:
+            self.lbl_status_calc.setText(
+                "<font color='red'>У папці моделі не знайдено DXF файлів.</font>"
+            )
+            return
+
         default_zip_name = (
-            f"{os.path.splitext(self.current_dxf_file_name())[0]}_"
-            f"{self.sanitize_filename_part(target_w)}_{self.sanitize_filename_part(target_h)}.zip"
+            f"{os.path.basename(os.path.abspath(self.project_dir))}_"
+            f"{self.sanitize_filename_part(target_w)}_"
+            f"{self.sanitize_filename_part(target_h)}.zip"
         )
-        zip_path = self.ask_export_zip_path("Куди зберегти ZIP з DXF?", default_zip_name)
+
+        zip_path = self.ask_export_zip_path(
+            "Куди зберегти ZIP з усіма DXF моделі?",
+            default_zip_name
+        )
+
         if not zip_path:
-            if original_doc is not None:
-                self.doc = original_doc
-                self.save_current_dxf()
-            if original_bytes is not None:
-                with open(self.dxf_path, "wb") as f:
-                    f.write(original_bytes)
-                self.doc = ezdxf.readfile(self.dxf_path)
+            return
+
+        temp_root = tempfile.mkdtemp(prefix="parametric_model_")
+
+        try:
+            output_dir = self.make_download_output_dir_in_parent(
+                temp_root,
+                target_w,
+                target_h
+            )
+
+            exported_count = 0
+            failed_files = []
+
+            for dxf_file in dxf_files:
+                ok = self.export_one_dxf_file_to_folder(
+                    dxf_file,
+                    output_dir,
+                    target_w,
+                    target_h
+                )
+
+                if ok:
+                    exported_count += 1
+                else:
+                    failed_files.append(dxf_file)
+
+            if exported_count == 0:
+                self.lbl_status_calc.setText(
+                    "<font color='red'>Не вдалося експортувати жоден DXF файл.</font>"
+                )
+                return
+
+            self.zip_directory(temp_root, zip_path)
+
+        finally:
+            shutil.rmtree(temp_root, ignore_errors=True)
+
+            self.dxf_path = original_dxf_path
+            self.doc = original_doc
             self.project_meta = original_meta
             self.parametric_groups = original_groups
             self.block_keep_state = original_keep_state
+
             self.save_original_geometries()
             self.update_dimension_inputs_from_meta()
             self.load_groups_into_list()
             self.load_entities_into_list()
             self.update_viewer()
-            return
-        temp_root = tempfile.mkdtemp(prefix="parametric_single_")
 
-        export_doc = copy.deepcopy(self.doc)
-        export_msp = export_doc.modelspace()
-        delete_handles = set()
-        for group in self.parametric_groups:
-            key = self.get_group_key(group)
-            if not self.block_keep_state.get(key, True):
-                delete_handles.update(group.get("handles", set()))
-        for hndl in list(delete_handles):
-            if hndl in export_doc.entitydb:
-                export_msp.delete_entity(export_doc.entitydb[hndl])
-
-        self.apply_opening_to_export_doc(export_doc)
-        export_name = self.build_export_file_name(target_w, target_h)
-        output_dir = self.make_download_output_dir_in_parent(temp_root, target_w, target_h)
-        export_path = self.export_doc_to_path(export_doc, output_dir, export_name)
-        self.zip_directory(temp_root, zip_path)
-        shutil.rmtree(temp_root, ignore_errors=True)
-        if original_bytes is not None:
-            with open(self.dxf_path, "wb") as f:
-                f.write(original_bytes)
-            self.doc = ezdxf.readfile(self.dxf_path)
-        elif original_doc is not None:
-            self.doc = original_doc
-            self.save_current_dxf()
-        self.project_meta = original_meta
-        self.parametric_groups = original_groups
-        self.block_keep_state = original_keep_state
-        self.save_original_geometries()
-        self.save_project_config()
-        self.scan_project_folder_for_dxf()
-        self.update_dimension_inputs_from_meta()
-        self.load_groups_into_list()
-        self.load_entities_into_list()
-        self.update_viewer()
-        self.lbl_status_calc.setText(f"<font color='#a5d6a7'>Створено ZIP: {zip_path}</font>")
+        if failed_files:
+            self.lbl_status_calc.setText(
+                f"<font color='#ffcc80'>ZIP створено: {zip_path}<br>"
+                f"Експортовано: {exported_count}, помилок: {len(failed_files)}</font>"
+            )
+        else:
+            self.lbl_status_calc.setText(
+                f"<font color='#a5d6a7'>Створено ZIP: {zip_path}<br>"
+                f"Експортовано DXF файлів: {exported_count}</font>"
+            )
 
     def export_model_dxf_with_dimensions(self):
         """Export all source DXF files from the current folder/model with the same target size."""
@@ -18620,6 +18724,366 @@ class MiniCAD(QMainWindow):
             self.block_keep_state = original_keep_state
             self.save_original_geometries()
             self.lbl_status_calc.setText(f"<font color='red'>Помилка експорту комплекту: {e}</font>")
+
+    def get_model_dxf_rows_from_db(self):
+        if not getattr(self, "current_door_model_id", None):
+            return []
+
+        if not getattr(self, "db", None) or not self.db.available:
+            return []
+
+        try:
+            with self.db.connect() as conn:
+                cur = conn.cursor()
+                rows = cur.execute(
+                    """
+                    SELECT
+                        Id,
+                        FileName,
+                        FileExtension,
+                        Folder,
+                        FileData
+                    FROM dbo.ProjectFiles
+                    WHERE DoorModelId = ?
+                    AND LOWER(FileExtension) = '.dxf'
+                    ORDER BY Folder, FileName
+                    """,
+                    int(self.current_door_model_id),
+                ).fetchall()
+
+            return rows
+
+        except Exception as exc:
+            self.lbl_status_calc.setText(
+                f"<font color='red'>Помилка читання DXF з БД: {exc}</font>"
+            )
+            return []
+
+
+    def get_model_dxf_rows_from_db(self):
+        if not getattr(self, "current_door_model_id", None):
+            return []
+
+        try:
+            with self.db.connect() as conn:
+                rows = conn.cursor().execute(
+                    """
+                    SELECT Id, FileName, FileExtension, Folder, FileData
+                    FROM dbo.ProjectFiles
+                    WHERE DoorModelId = ?
+                    AND LOWER(FileExtension) = '.dxf'
+                    ORDER BY Folder, FileName
+                    """,
+                    int(self.current_door_model_id),
+                ).fetchall()
+            return rows
+
+        except Exception as exc:
+            self.lbl_status_calc.setText(
+                f"<font color='red'>Помилка читання DXF з БД: {exc}</font>"
+            )
+            return []
+
+
+    def export_model_zip_from_db_without_changes(self):
+        rows = self.get_model_dxf_rows_from_db()
+        if not rows:
+            self.lbl_status_calc.setText(
+                "<font color='red'>У цій моделі не знайдено DXF файлів.</font>"
+            )
+            return
+
+        target_w = self.parse_numeric_text(self.input_target_width.text())
+        target_h = self.parse_numeric_text(self.input_target_height.text())
+
+        zip_path = self.ask_export_zip_path(
+            "Куди зберегти ZIP без змін?",
+            f"model_{self.current_door_model_id}_original.zip"
+        )
+        if not zip_path:
+            return
+
+        temp_root = tempfile.mkdtemp(prefix="parametric_original_")
+
+        try:
+            output_dir = self.make_download_output_dir_in_parent(
+                temp_root, target_w, target_h
+            )
+
+            for row in rows:
+                folder = str(row.Folder or "").strip().replace("\\", "/")
+                file_name = str(row.FileName or f"file_{row.Id}.dxf")
+
+                target_dir = os.path.join(output_dir, folder)
+                os.makedirs(target_dir, exist_ok=True)
+
+                with open(os.path.join(target_dir, file_name), "wb") as f:
+                    f.write(bytes(row.FileData))
+
+            self.zip_directory(temp_root, zip_path)
+
+        finally:
+            shutil.rmtree(temp_root, ignore_errors=True)
+
+        self.lbl_status_calc.setText(
+            f"<font color='#a5d6a7'>Створено ZIP без змін: {zip_path}</font>"
+        )
+
+
+
+
+    def export_model_zip_from_db_with_changes(self):
+        self.collect_text_settings_from_inputs()
+
+        if not getattr(self, "current_door_model_id", None):
+            self.lbl_status_calc.setText(
+                "<font color='red'>Не вибрана модель дверей з БД.</font>"
+            )
+            return
+
+        target_w = self.parse_numeric_text(self.input_target_width.text())
+        target_h = self.parse_numeric_text(self.input_target_height.text())
+
+        if target_w is None or target_h is None:
+            self.lbl_status_calc.setText(
+                "<font color='red'>Вкажіть цільові W/H для експорту.</font>"
+            )
+            return
+
+        rows = self.get_model_dxf_rows_from_db()
+
+        if not rows:
+            self.lbl_status_calc.setText(
+                "<font color='red'>У цій моделі немає DXF файлів у БД.</font>"
+            )
+            return
+
+        default_zip_name = (
+            f"model_{self.current_door_model_id}_"
+            f"{self.sanitize_filename_part(target_w)}_"
+            f"{self.sanitize_filename_part(target_h)}_changed.zip"
+        )
+
+        zip_path = self.ask_export_zip_path(
+            "Куди зберегти ZIP із перерахованими DXF?",
+            default_zip_name
+        )
+
+        if not zip_path:
+            return
+
+        original_dxf_path = getattr(self, "dxf_path", None)
+        original_project_dir = getattr(self, "project_dir", None)
+        original_doc = copy.deepcopy(self.doc) if getattr(self, "doc", None) is not None else None
+        original_meta = copy.deepcopy(self.project_meta)
+        original_groups = copy.deepcopy(self.parametric_groups)
+        original_keep_state = copy.deepcopy(self.block_keep_state)
+        original_project_file_id = getattr(self, "current_project_file_id", None)
+        original_door_model_id = getattr(self, "current_door_model_id", None)
+
+        temp_root = tempfile.mkdtemp(prefix="parametric_model_changed_")
+        work_root = os.path.join(temp_root, "_work")
+        zip_root = os.path.join(temp_root, "_zip")
+        os.makedirs(work_root, exist_ok=True)
+        os.makedirs(zip_root, exist_ok=True)
+
+        exported_count = 0
+        failed_files = []
+
+        try:
+            output_dir = self.make_download_output_dir_in_parent(
+                zip_root,
+                target_w,
+                target_h
+            )
+
+            for row in rows:
+                project_file_id = int(row.Id)
+                file_name = str(row.FileName or f"file_{project_file_id}.dxf")
+                folder = str(row.Folder or "").strip().replace("\\", "/")
+
+                try:
+                    source_bytes = bytes(row.FileData)
+
+                    work_dir = tempfile.mkdtemp(prefix=f"pf_{project_file_id}_", dir=work_root)
+                    source_path = os.path.join(work_dir, file_name)
+
+                    with open(source_path, "wb") as f:
+                        f.write(source_bytes)
+
+                    config = self.db.load_project_config(project_file_id=project_file_id)
+
+                    if not config:
+                        failed_files.append(file_name)
+                        continue
+
+                    self.dxf_path = source_path
+                    self.project_dir = work_dir
+                    self.current_project_file_id = project_file_id
+                    self.current_door_model_id = original_door_model_id
+
+                    self.doc = ezdxf.readfile(source_path)
+
+                    self.project_meta = copy.deepcopy(config.get("meta") or {})
+                    self.parametric_groups = copy.deepcopy(config.get("groups") or [])
+                    self.block_keep_state = copy.deepcopy(config.get("block_keep_state") or {})
+
+                    self.project_meta["target_width"] = target_w
+                    self.project_meta["target_height"] = target_h
+
+                    if not self.project_meta.get("source_width"):
+                        self.project_meta["source_width"] = self.project_meta.get("target_width")
+
+                    if not self.project_meta.get("source_height"):
+                        self.project_meta["source_height"] = self.project_meta.get("target_height")
+
+                    self.save_original_geometries()
+
+                    self.is_loading_history = True
+                    self.suppress_project_config_save = True
+
+                    try:
+                        ok = self.process_parametric_percentage_scale(
+                            save_result=True,
+                            record_history=False
+                        )
+                    finally:
+                        self.suppress_project_config_save = False
+                        self.is_loading_history = False
+
+                    if not ok:
+                        failed_files.append(file_name)
+                        continue
+
+                    export_doc = copy.deepcopy(self.doc)
+                    export_msp = export_doc.modelspace()
+
+                    delete_handles = set()
+
+                    for group in self.parametric_groups:
+                        key = self.get_group_key(group)
+                        if not self.block_keep_state.get(key, True):
+                            delete_handles.update(group.get("handles", set()))
+
+                    for hndl in list(delete_handles):
+                        if hndl in export_doc.entitydb:
+                            export_msp.delete_entity(export_doc.entitydb[hndl])
+
+                    self.apply_opening_to_export_doc(export_doc)
+
+                    target_dir = os.path.join(output_dir, folder)
+                    os.makedirs(target_dir, exist_ok=True)
+
+                    base_name = os.path.splitext(file_name)[0]
+                    export_name = (
+                        f"{base_name}_"
+                        f"{self.sanitize_filename_part(target_w)}_"
+                        f"{self.sanitize_filename_part(target_h)}.dxf"
+                    )
+
+                    export_path = os.path.join(target_dir, export_name)
+                    export_doc.saveas(export_path)
+
+                    exported_count += 1
+
+                except Exception as exc:
+                    failed_files.append(f"{file_name}: {exc}")
+
+            if exported_count == 0:
+                self.lbl_status_calc.setText(
+                    "<font color='red'>Не вдалося експортувати жоден DXF із змінами.</font>"
+                )
+                return
+
+            self.zip_directory(zip_root, zip_path)
+
+        finally:
+            shutil.rmtree(temp_root, ignore_errors=True)
+
+            self.dxf_path = original_dxf_path
+            self.project_dir = original_project_dir
+            self.doc = original_doc
+            self.project_meta = original_meta
+            self.parametric_groups = original_groups
+            self.block_keep_state = original_keep_state
+            self.current_project_file_id = original_project_file_id
+            self.current_door_model_id = original_door_model_id
+
+            if self.doc is not None:
+                self.save_original_geometries()
+
+            self.update_dimension_inputs_from_meta()
+            self.load_groups_into_list()
+            self.load_entities_into_list()
+            self.update_viewer()
+
+        if failed_files:
+            self.lbl_status_calc.setText(
+                f"<font color='#ffcc80'>ZIP створено із змінами: {zip_path}<br>"
+                f"Експортовано: {exported_count}, помилок: {len(failed_files)}</font>"
+            )
+        else:
+            self.lbl_status_calc.setText(
+                f"<font color='#a5d6a7'>Створено ZIP із змінами: {zip_path}<br>"
+                f"Експортовано DXF: {exported_count}</font>"
+            )
+
+
+    def export_model_zip_from_db_without_changes(self):
+        rows = self.get_model_dxf_rows_from_db()
+
+        if not rows:
+            self.lbl_status_calc.setText(
+                "<font color='red'>У цій моделі не знайдено DXF файлів у БД.</font>"
+            )
+            return
+
+        target_w = self.parse_numeric_text(self.input_target_width.text())
+        target_h = self.parse_numeric_text(self.input_target_height.text())
+
+        default_zip_name = (
+            f"model_{self.current_door_model_id}_"
+            f"{self.sanitize_filename_part(target_w)}_"
+            f"{self.sanitize_filename_part(target_h)}_original.zip"
+        )
+
+        zip_path = self.ask_export_zip_path(
+            "Куди зберегти ZIP без змін?",
+            default_zip_name
+        )
+
+        if not zip_path:
+            return
+
+        temp_root = tempfile.mkdtemp(prefix="parametric_original_")
+
+        try:
+            output_dir = self.make_download_output_dir_in_parent(
+                temp_root,
+                target_w,
+                target_h
+            )
+
+            for row in rows:
+                folder = str(row.Folder or "").strip().replace("\\", "/")
+                file_name = str(row.FileName or f"file_{row.Id}.dxf")
+
+                target_dir = os.path.join(output_dir, folder)
+                os.makedirs(target_dir, exist_ok=True)
+
+                target_path = os.path.join(target_dir, file_name)
+
+                with open(target_path, "wb") as f:
+                    f.write(bytes(row.FileData))
+
+            self.zip_directory(temp_root, zip_path)
+
+        finally:
+            shutil.rmtree(temp_root, ignore_errors=True)
+
+        self.lbl_status_calc.setText(
+            f"<font color='#a5d6a7'>Створено ZIP без змін: {zip_path}</font>"
+        )
 
     def ask_batch_table_export_options(self):
         zip_path = self.ask_export_zip_path("Куди зберегти ZIP пакета?", "parametric_batch_export.zip")
@@ -20041,6 +20505,27 @@ class MiniCAD(QMainWindow):
             item = grid.itemAtPosition(row, col)
             if item and item.widget():
                 item.widget().setVisible(visible)
+
+    def ask_zip_export_mode(self):
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Режим експорту ZIP")
+        msg.setText("Як експортувати DXF файли моделі?")
+
+        btn_changed = msg.addButton("Із змінами W/H", QMessageBox.ButtonRole.AcceptRole)
+        btn_original = msg.addButton("Без змін", QMessageBox.ButtonRole.ActionRole)
+        msg.addButton("Скасувати", QMessageBox.ButtonRole.RejectRole)
+
+        msg.exec()
+
+        clicked = msg.clickedButton()
+
+        if clicked == btn_changed:
+            return "changed"
+
+        if clicked == btn_original:
+            return "original"
+
+        return None
 
     def apply_growth_axis_ui(self, axis):
         """Показує тільки ті осі, які дозволені режимом файлу."""
