@@ -24,9 +24,13 @@ OPENING_KEYS = {
     "source_door_opening",
     "target_door_opening",
 }
-BLOCK_LIST_KEYS = {"keep_blocks", "delete_blocks"}
+BLOCK_LIST_KEYS = {
+    "keep_blocks", "delete_blocks",
+    "keep_group_ids", "delete_group_ids",
+    "keep_group_uids", "delete_group_uids",
+}
 MODEL_TEXT_KEYS = {"model", "model_name", "door_model", "model_folder", "folder_path"}
-MODEL_NUMERIC_KEYS = {"model_id", "door_model_id"}
+MODEL_NUMERIC_KEYS = {"model_id", "door_model_id", "file_id", "project_file_id"}
 JOB_TEXT_KEYS = {"order_number", "article", "door_type"}
 
 
@@ -35,6 +39,16 @@ def normalize_key(value):
     compact = re.sub(r"\s+", " ", text)
     if "номер замовлення" in compact or "номер заказа" in compact:
         return "order_number"
+    if "projectfileid" in compact or "project_file_id" in compact or "id файлу" in compact or "id файла" in compact:
+        return "file_id"
+    if "видал" in compact and "id груп" in compact:
+        return "delete_group_ids"
+    if ("залиш" in compact or "лишит" in compact) and "id груп" in compact:
+        return "keep_group_ids"
+    if "видал" in compact and "uid груп" in compact:
+        return "delete_group_uids"
+    if ("залиш" in compact or "лишит" in compact) and "uid груп" in compact:
+        return "keep_group_uids"
     if "висота двер" in compact or "высота двер" in compact:
         return "target_height"
     if "ширина двер" in compact:
@@ -102,6 +116,12 @@ def normalize_key(value):
         "id моделі": "model_id",
         "model_id": "model_id",
         "door_model_id": "door_model_id",
+        "file_id": "file_id",
+        "project_file_id": "file_id",
+        "delete_group_ids": "delete_group_ids",
+        "keep_group_ids": "keep_group_ids",
+        "delete_group_uids": "delete_group_uids",
+        "keep_group_uids": "keep_group_uids",
         "папка моделі": "model_folder",
         "model_folder": "model_folder",
         "folder_path": "folder_path",

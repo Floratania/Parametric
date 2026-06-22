@@ -4933,6 +4933,7 @@ class ParametricDb:
             }
 
             group = {
+                "db_group_id": int(gr.Id),
                 "uid": gr.Uid,
                 "name": gr.Name,
                 "handles": handles,

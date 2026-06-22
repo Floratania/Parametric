@@ -14325,6 +14325,12 @@ class MiniCAD(QMainWindow):
     def save_current_project_to_db(self, status="ConfigSaved"):
         if not getattr(self, "db", None) or not self.current_user_id():
             return
+        if self.is_db_uri(getattr(self, "dxf_path", "")) and not getattr(self, "current_project_file_id", None):
+            if hasattr(self, "lbl_status_calc"):
+                self.lbl_status_calc.setText(
+                    "<font color='#ff9800'>Спочатку виберіть конкретний DXF у папці моделі.</font>"
+                )
+            return
         dxf_bytes = self.dxf_doc_to_bytes() if self.is_db_file_open() else None
         file_name_override = getattr(self, "current_db_file_name", None) if self.is_db_file_open() else None
         folder_override = self.current_dxf_folder_name()
@@ -14756,6 +14762,421 @@ class MiniCAD(QMainWindow):
             shutil.rmtree(temp_root, ignore_errors=True)
             self.restore_batch_original_state(original_state)
             QMessageBox.warning(self, "Протилежне відкривання", f"Не вдалося створити протилежне відкривання:\n{exc}")
+
+    def create_model_copy_from_current_settings(self):
+        if not getattr(self, "db", None) or not getattr(self.db, "available", False):
+            QMessageBox.warning(self, "Копія моделі", "БД недоступна.")
+            return
+        if not self.current_user_id():
+            QMessageBox.warning(self, "Копія моделі", "Користувач не визначений.")
+            return
+
+        if not self.is_db_uri(getattr(self, "project_dir", "")):
+            self.register_current_folder_model(show_errors=False)
+        if getattr(self, "current_project_file_id", None) or not self.is_db_uri(getattr(self, "project_dir", "")):
+            self.save_current_project_to_db("BeforeSettingsCopy")
+
+        source_model_id = getattr(self, "current_door_model_id", None) or getattr(self, "selected_db_model_id", None)
+        if not source_model_id:
+            model = self.pick_door_model("Створити копію з налаштувань")
+            if not model:
+                return
+            source_model_id = int(model.get("id"))
+
+        model_data = self.db.load_door_model(source_model_id)
+        if not model_data:
+            QMessageBox.warning(self, "Копія моделі", f"Не вдалося прочитати модель:\n{self.db.last_error}")
+            return
+
+        source_name = model_data.get("model_name") or f"Model {source_model_id}"
+        desired_opening = (
+            self.project_meta.get("target_door_opening")
+            or self.project_meta.get("door_opening")
+            or (model_data.get("meta") or {}).get("source_door_opening")
+            or "left"
+        )
+        default_name = f"{source_name} [{self.opening_label(desired_opening)}] варіант"
+        target_name, ok = QInputDialog.getText(
+            self,
+            "Копія моделі з налаштувань",
+            "Назва нової моделі:",
+            text=default_name,
+        )
+        if not ok or not target_name.strip():
+            return
+        target_name = target_name.strip()
+
+        answer = QMessageBox.question(
+            self,
+            "Копія моделі з налаштувань",
+            (
+                "Створити окрему модель із поточних налаштувань?\n\n"
+                f"Відкривання: {self.opening_label(desired_opening)}\n"
+                "Групи з IsKeep=0 будуть фізично видалені з DXF. Текстові налаштування збережуться."
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        source_meta = model_data.get("meta") or {}
+        source_folder = model_data.get("folder_path") or f"DoorModel_{source_model_id}"
+        target_folder_key = f"{source_folder}__settings_{self.sanitize_model_name(target_name)}"
+        target_model_id = self.db.get_or_create_door_model(
+            folder_path=target_folder_key,
+            model_name=target_name,
+            source_width=source_meta.get("source_width"),
+            source_height=source_meta.get("source_height"),
+            source_door_opening=desired_opening,
+            user_id=self.current_user_id(),
+        )
+        if not target_model_id:
+            QMessageBox.warning(self, "Копія моделі", f"Не вдалося створити модель:\n{self.db.last_error}")
+            return
+
+        original_state = {
+            "project_dir": getattr(self, "project_dir", None),
+            "dxf_path": getattr(self, "dxf_path", None),
+            "project_file_id": getattr(self, "current_project_file_id", None),
+            "door_model_id": getattr(self, "current_door_model_id", None),
+            "selected_db_model_id": getattr(self, "selected_db_model_id", None),
+            "db_file_name": getattr(self, "current_db_file_name", None),
+            "db_file_folder": getattr(self, "current_db_file_folder", None),
+            "doc": copy.deepcopy(self.doc),
+            "meta": copy.deepcopy(self.project_meta),
+            "groups": copy.deepcopy(self.parametric_groups),
+            "keep_state": copy.deepcopy(self.block_keep_state),
+        }
+        created = 0
+        removed_groups = 0
+        skipped = 0
+
+        try:
+            for record in self.db.get_model_files(source_model_id):
+                project_file_id = int(record.get("id"))
+                data = self.db.get_project_file_binary(project_file_id)
+                loaded = self.db.load_project_config(project_file_id=project_file_id)
+                if not data or not loaded:
+                    skipped += 1
+                    continue
+
+                target_doc = self.read_dxf_doc_from_bytes(data)
+                target_meta = copy.deepcopy(loaded.get("meta") or source_meta)
+                groups = copy.deepcopy(loaded.get("groups") or [])
+                keep_state = copy.deepcopy(loaded.get("block_keep_state") or {})
+                handles_to_delete = set()
+                remaining_groups = []
+                for group in groups:
+                    group["handles"] = set(group.get("handles", []))
+                    uid = str(group.get("uid") or "")
+                    if not bool(keep_state.get(uid, True)):
+                        handles_to_delete.update(group["handles"])
+                        removed_groups += 1
+                    else:
+                        remaining_groups.append(group)
+
+                target_msp = target_doc.modelspace()
+                for handle in handles_to_delete:
+                    if handle in target_doc.entitydb:
+                        try:
+                            target_msp.delete_entity(target_doc.entitydb[handle])
+                        except Exception:
+                            pass
+
+                text_settings = copy.deepcopy(target_meta.get("door_text") or self.default_text_settings())
+                if text_settings.get("handle") in handles_to_delete:
+                    text_settings["enabled"] = False
+                    text_settings["handle"] = None
+                    text_settings["text"] = ""
+
+                file_source_opening = target_meta.get("source_door_opening") or "left"
+                if file_source_opening != desired_opening:
+                    mirror_info = self.mirror_doc_by_width_axis_for_opposite(target_doc, target_meta)
+                    if mirror_info is not None:
+                        axis_value, mirror_by_y = mirror_info
+                        remaining_groups = self.mirrored_group_rules_for_opposite(remaining_groups, mirror_by_y)
+                        text_settings = self.mirrored_text_settings_for_opposite(
+                            text_settings,
+                            axis_value,
+                            mirror_by_y,
+                        )
+
+                target_meta["source_door_opening"] = desired_opening
+                target_meta["target_door_opening"] = desired_opening
+                target_meta["door_opening"] = desired_opening
+                target_meta["door_text"] = text_settings
+                previous_doc = self.doc
+                previous_meta = self.project_meta
+                try:
+                    self.doc = target_doc
+                    self.project_meta = target_meta
+                    self.apply_door_text_to_doc(target_doc)
+                finally:
+                    self.doc = previous_doc
+                    self.project_meta = previous_meta
+                target_keep_state = {
+                    str(group.get("uid") or ""): True
+                    for group in remaining_groups
+                }
+                file_name = record.get("file_name") or f"project_file_{project_file_id}.dxf"
+                folder_name = str(record.get("folder") or "")
+                saved_id = self.db.save_project_snapshot(
+                    project_dir=target_folder_key,
+                    dxf_path=file_name,
+                    project_meta=target_meta,
+                    parametric_groups=remaining_groups,
+                    block_keep_state=target_keep_state,
+                    user_id=self.current_user_id(),
+                    status="SettingsModelCopy",
+                    project_file_id=None,
+                    door_model_id=target_model_id,
+                    dxf_bytes=self.dxf_doc_to_bytes(target_doc),
+                    file_name_override=file_name,
+                    folder_override=folder_name,
+                )
+                if saved_id:
+                    created += 1
+                else:
+                    skipped += 1
+
+            if created == 0:
+                raise RuntimeError("Не створено жодного DXF копії моделі.")
+
+            self.restore_batch_original_state(original_state)
+            self.current_door_model_id = target_model_id
+            self.selected_db_model_id = target_model_id
+            self.current_project_file_id = None
+            self.current_db_file_name = None
+            self.current_db_file_folder = None
+            self.project_dir = f"db://door_model/{target_model_id}"
+            self.dxf_path = f"db://door_model/{target_model_id}"
+            self.scan_project_folder_for_dxf()
+            self.update_file_status_panel()
+            self.lbl_status_calc.setText(
+                f"<font color='#a5d6a7'>Створено копію налаштувань: {target_name}; DXF: {created}; видалено груп: {removed_groups}; пропущено: {skipped}</font>"
+            )
+        except Exception as exc:
+            self.restore_batch_original_state(original_state)
+            QMessageBox.warning(self, "Копія моделі", f"Не вдалося створити копію:\n{exc}")
+
+    def create_model_without_details(self):
+        if not getattr(self, "db", None) or not getattr(self.db, "available", False):
+            QMessageBox.warning(self, "Модель без деталей", "БД недоступна.")
+            return
+        if not self.current_user_id():
+            QMessageBox.warning(self, "Модель без деталей", "Користувач не визначений.")
+            return
+
+        if not self.is_db_uri(getattr(self, "project_dir", "")):
+            self.register_current_folder_model(show_errors=False)
+        if getattr(self, "current_project_file_id", None) or not self.is_db_uri(getattr(self, "project_dir", "")):
+            self.save_current_project_to_db("BeforeModelVariant")
+
+        source_model_id = getattr(self, "current_door_model_id", None) or getattr(self, "selected_db_model_id", None)
+        if not source_model_id:
+            model = self.pick_door_model("Створити модель без деталей")
+            if not model:
+                return
+            source_model_id = int(model.get("id"))
+
+        model_data = self.db.load_door_model(source_model_id)
+        if not model_data:
+            QMessageBox.warning(self, "Модель без деталей", f"Не вдалося прочитати модель:\n{self.db.last_error}")
+            return
+
+        source_name = model_data.get("model_name") or f"Model {source_model_id}"
+        files = self.db.get_model_files(source_model_id)
+        configs = {}
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Створити модель без деталей")
+        dialog.resize(760, 560)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel(
+            "Позначте групи, які треба видалити. Групи показані всередині конкретного ProjectFileId."
+        ))
+        name_input = QLineEdit(f"{source_name} без деталей")
+        layout.addWidget(QLabel("Назва нової моделі:"))
+        layout.addWidget(name_input)
+
+        tree = QTreeWidget()
+        tree.setHeaderLabels(["Файл / група", "ID"])
+        tree.setColumnWidth(0, 570)
+        layout.addWidget(tree)
+
+        for record in files:
+            project_file_id = int(record.get("id"))
+            loaded = self.db.load_project_config(project_file_id=project_file_id)
+            if not loaded:
+                continue
+            configs[project_file_id] = loaded
+            folder = str(record.get("folder") or "").strip("/\\")
+            file_name = record.get("file_name") or f"file_{project_file_id}.dxf"
+            display_path = f"{folder}/{file_name}" if folder else file_name
+            file_item = QTreeWidgetItem([display_path, f"FileId={project_file_id}"])
+            file_item.setData(0, Qt.ItemDataRole.UserRole, {"type": "variant_file", "file_id": project_file_id})
+            tree.addTopLevelItem(file_item)
+
+            for group in loaded.get("groups") or []:
+                group_id = group.get("db_group_id")
+                uid = group.get("uid") or ""
+                child = QTreeWidgetItem([
+                    str(group.get("name") or "Група"),
+                    f"GroupId={group_id}" if group_id else f"Uid={uid}",
+                ])
+                child.setFlags(child.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                child.setCheckState(0, Qt.CheckState.Unchecked)
+                child.setData(0, Qt.ItemDataRole.UserRole, {
+                    "type": "variant_group",
+                    "file_id": project_file_id,
+                    "group_id": group_id,
+                    "uid": uid,
+                })
+                file_item.addChild(child)
+            file_item.setExpanded(True)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        target_name = name_input.text().strip()
+        if not target_name:
+            QMessageBox.warning(self, "Модель без деталей", "Введіть назву нової моделі.")
+            return
+
+        selected_uids_by_file = {}
+        for top_index in range(tree.topLevelItemCount()):
+            file_item = tree.topLevelItem(top_index)
+            for child_index in range(file_item.childCount()):
+                child = file_item.child(child_index)
+                if child.checkState(0) != Qt.CheckState.Checked:
+                    continue
+                data = child.data(0, Qt.ItemDataRole.UserRole) or {}
+                selected_uids_by_file.setdefault(int(data.get("file_id")), set()).add(str(data.get("uid") or ""))
+
+        if not selected_uids_by_file:
+            QMessageBox.information(self, "Модель без деталей", "Не вибрано жодної деталі для видалення.")
+            return
+
+        source_meta = model_data.get("meta") or {}
+        source_folder = model_data.get("folder_path") or f"DoorModel_{source_model_id}"
+        variant_folder_key = f"{source_folder}__variant_{self.sanitize_model_name(target_name)}"
+        target_model_id = self.db.get_or_create_door_model(
+            folder_path=variant_folder_key,
+            model_name=target_name,
+            source_width=source_meta.get("source_width"),
+            source_height=source_meta.get("source_height"),
+            source_door_opening=source_meta.get("source_door_opening") or "left",
+            user_id=self.current_user_id(),
+        )
+        if not target_model_id:
+            QMessageBox.warning(self, "Модель без деталей", f"Не вдалося створити модель:\n{self.db.last_error}")
+            return
+
+        original_state = {
+            "project_dir": getattr(self, "project_dir", None),
+            "dxf_path": getattr(self, "dxf_path", None),
+            "project_file_id": getattr(self, "current_project_file_id", None),
+            "door_model_id": getattr(self, "current_door_model_id", None),
+            "selected_db_model_id": getattr(self, "selected_db_model_id", None),
+            "db_file_name": getattr(self, "current_db_file_name", None),
+            "db_file_folder": getattr(self, "current_db_file_folder", None),
+            "doc": copy.deepcopy(self.doc),
+            "meta": copy.deepcopy(self.project_meta),
+            "groups": copy.deepcopy(self.parametric_groups),
+            "keep_state": copy.deepcopy(self.block_keep_state),
+        }
+        created = 0
+        skipped = 0
+
+        try:
+            for record in files:
+                project_file_id = int(record.get("id"))
+                data = self.db.get_project_file_binary(project_file_id)
+                loaded = configs.get(project_file_id) or self.db.load_project_config(project_file_id=project_file_id)
+                if not data or not loaded:
+                    skipped += 1
+                    continue
+
+                target_doc = self.read_dxf_doc_from_bytes(data)
+                selected_uids = selected_uids_by_file.get(project_file_id, set())
+                groups = copy.deepcopy(loaded.get("groups") or [])
+                handles_to_delete = set()
+                remaining_groups = []
+                for group in groups:
+                    uid = str(group.get("uid") or "")
+                    group["handles"] = set(group.get("handles", []))
+                    if uid in selected_uids:
+                        handles_to_delete.update(group["handles"])
+                    else:
+                        remaining_groups.append(group)
+
+                target_msp = target_doc.modelspace()
+                for handle in handles_to_delete:
+                    if handle in target_doc.entitydb:
+                        try:
+                            target_msp.delete_entity(target_doc.entitydb[handle])
+                        except Exception:
+                            pass
+
+                target_meta = copy.deepcopy(loaded.get("meta") or source_meta)
+                text_settings = copy.deepcopy(target_meta.get("door_text") or self.default_text_settings())
+                if text_settings.get("handle") in handles_to_delete:
+                    text_settings["enabled"] = False
+                    text_settings["handle"] = None
+                    text_settings["text"] = ""
+                target_meta["door_text"] = text_settings
+
+                remaining_uids = {str(group.get("uid") or "") for group in remaining_groups}
+                target_keep_state = {
+                    key: value
+                    for key, value in (loaded.get("block_keep_state") or {}).items()
+                    if str(key) in remaining_uids
+                }
+                file_name = record.get("file_name") or f"project_file_{project_file_id}.dxf"
+                folder_name = str(record.get("folder") or "")
+                saved_id = self.db.save_project_snapshot(
+                    project_dir=variant_folder_key,
+                    dxf_path=file_name,
+                    project_meta=target_meta,
+                    parametric_groups=remaining_groups,
+                    block_keep_state=target_keep_state,
+                    user_id=self.current_user_id(),
+                    status="ModelVariantWithoutDetails",
+                    project_file_id=None,
+                    door_model_id=target_model_id,
+                    dxf_bytes=self.dxf_doc_to_bytes(target_doc),
+                    file_name_override=file_name,
+                    folder_override=folder_name,
+                )
+                if saved_id:
+                    created += 1
+                else:
+                    skipped += 1
+
+            if created == 0:
+                raise RuntimeError("Не вдалося створити жодного DXF нової моделі.")
+
+            self.restore_batch_original_state(original_state)
+            self.current_door_model_id = target_model_id
+            self.selected_db_model_id = target_model_id
+            self.current_project_file_id = None
+            self.current_db_file_name = None
+            self.current_db_file_folder = None
+            self.project_dir = f"db://door_model/{target_model_id}"
+            self.dxf_path = f"db://door_model/{target_model_id}"
+            self.scan_project_folder_for_dxf()
+            self.update_file_status_panel()
+            self.lbl_status_calc.setText(
+                f"<font color='#a5d6a7'>Створено модель без деталей: {target_name}; DXF: {created}, пропущено: {skipped}</font>"
+            )
+        except Exception as exc:
+            self.restore_batch_original_state(original_state)
+            QMessageBox.warning(self, "Модель без деталей", f"Не вдалося створити модель:\n{exc}")
 
     def folder_has_dxf_recursive(self, folder_path):
         try:
@@ -15339,18 +15760,28 @@ class MiniCAD(QMainWindow):
         return stream.getvalue().encode("utf-8", errors="surrogateescape")
 
     def make_history_manager(self):
-        if self.is_db_file_open():
+        if self.is_db_uri(getattr(self, "dxf_path", "")):
             return MemoryHistoryManager(self)
         return HistoryManager(self.dxf_path)
 
     def save_current_dxf(self):
-        if self.is_db_file_open():
-            self.db.update_project_file_binary(
+        if self.is_db_uri(getattr(self, "dxf_path", "")):
+            project_file_id = getattr(self, "current_project_file_id", None)
+            if not project_file_id:
+                if hasattr(self, "lbl_status_calc"):
+                    self.lbl_status_calc.setText(
+                        "<font color='#ff9800'>Виберіть конкретний DXF у папці моделі перед редагуванням.</font>"
+                    )
+                return False
+            saved = self.db.update_project_file_binary(
                 self.current_project_file_id,
                 self.dxf_doc_to_bytes(),
             )
-            return
+            return bool(saved)
+        if not getattr(self, "dxf_path", None):
+            return False
         self.doc.saveas(self.dxf_path)
+        return True
 
     def init_ui(self):
         self.load_ui_shell()
@@ -15456,13 +15887,19 @@ class MiniCAD(QMainWindow):
         self.btn_batch_import_models = QPushButton("Імпорт моделей")
         self.btn_batch_import_models.clicked.connect(self.batch_import_models_from_folder)
         model_actions_box.addWidget(self.btn_batch_import_models)
+        control_panel_layout.addLayout(model_actions_box)
+
+        model_variant_actions_box = QHBoxLayout()
         self.btn_generate_opposite_model = QPushButton("Протилежне відкривання")
         self.btn_generate_opposite_model.clicked.connect(self.generate_opposite_opening_model)
-        model_actions_box.addWidget(self.btn_generate_opposite_model)
+        model_variant_actions_box.addWidget(self.btn_generate_opposite_model)
+        self.btn_create_model_without_details = QPushButton("Копія з налаштувань")
+        self.btn_create_model_without_details.clicked.connect(self.create_model_copy_from_current_settings)
+        model_variant_actions_box.addWidget(self.btn_create_model_without_details)
         self.btn_delete_door_model = QPushButton("Видалити модель")
         self.btn_delete_door_model.clicked.connect(self.delete_door_model_from_server)
-        model_actions_box.addWidget(self.btn_delete_door_model)
-        control_panel_layout.addLayout(model_actions_box)
+        model_variant_actions_box.addWidget(self.btn_delete_door_model)
+        control_panel_layout.addLayout(model_variant_actions_box)
 
         self.side_tabs = QTabWidget()
         self.side_tabs.setDocumentMode(True)
@@ -17604,12 +18041,29 @@ class MiniCAD(QMainWindow):
                 name = group.get("name", "")
                 key = self.get_group_key(group)
                 self.block_keep_state[key] = key in keep_set or name in keep_set
+        if params.get("keep_group_ids") or params.get("keep_group_uids"):
+            keep_ids = {str(value).strip() for value in params.get("keep_group_ids", [])}
+            keep_uids = {str(value).strip() for value in params.get("keep_group_uids", [])}
+            for group in self.parametric_groups:
+                key = self.get_group_key(group)
+                group_id = str(group.get("db_group_id") or "")
+                uid = str(group.get("uid") or key)
+                self.block_keep_state[key] = group_id in keep_ids or uid in keep_uids
         if "delete_blocks" in params and params["delete_blocks"]:
             delete_set = set(params["delete_blocks"])
             for group in self.parametric_groups:
                 name = group.get("name", "")
                 key = self.get_group_key(group)
                 if key in delete_set or name in delete_set:
+                    self.block_keep_state[key] = False
+        if params.get("delete_group_ids") or params.get("delete_group_uids"):
+            delete_ids = {str(value).strip() for value in params.get("delete_group_ids", [])}
+            delete_uids = {str(value).strip() for value in params.get("delete_group_uids", [])}
+            for group in self.parametric_groups:
+                key = self.get_group_key(group)
+                group_id = str(group.get("db_group_id") or "")
+                uid = str(group.get("uid") or key)
+                if group_id in delete_ids or uid in delete_uids:
                     self.block_keep_state[key] = False
         if refresh_ui:
             self.update_dimension_inputs_from_meta()
@@ -18292,8 +18746,17 @@ class MiniCAD(QMainWindow):
                     continue
 
                 source_entries = self.batch_source_entries_for_model(model)
+                requested_file_id = job.get("file_id", job.get("project_file_id"))
+                if requested_file_id not in (None, ""):
+                    requested_file_id = int(requested_file_id)
+                    source_entries = [
+                        entry for entry in source_entries
+                        if entry.get("type") == "db"
+                        and int((entry.get("record") or {}).get("id")) == requested_file_id
+                    ]
                 if not source_entries:
-                    failed.append(f"рядок {row_index}: немає DXF для моделі")
+                    suffix = f" і FileId={requested_file_id}" if requested_file_id not in (None, "") else ""
+                    failed.append(f"рядок {row_index}: немає DXF для моделі{suffix}")
                     skipped += 1
                     continue
 
@@ -18336,8 +18799,9 @@ class MiniCAD(QMainWindow):
                             self.doc = ezdxf.readfile(self.dxf_path)
                             self.load_project_config()
 
-                        self.save_original_geometries()
                         self.apply_imported_parameters(job, refresh_ui=False, save_config=False)
+                        self.apply_door_text_to_doc()
+                        self.save_original_geometries()
                         target_w = self.project_meta.get("target_width")
                         target_h = self.project_meta.get("target_height")
                         if target_w is None or target_h is None:
