@@ -13634,8 +13634,9 @@ class ParametricEngine:
             "Вниз"
         )
 
-        growth_x = val_x * group.get("growth_p_w", 0.0)
-        growth_y = val_y * group.get("growth_p_h", 0.0)
+        can_resize = bool(group.get("resizes", False))
+        growth_x = val_x * group.get("growth_p_w", 0.0) if can_resize else 0.0
+        growth_y = val_y * group.get("growth_p_h", 0.0) if can_resize else 0.0
 
         return (shift_x, shift_y, 0), (growth_x, growth_y, 0)
 
@@ -16239,9 +16240,18 @@ class MiniCAD(QMainWindow):
         growth_axis_layout.addWidget(self.combo_group_growth_axis)
         group_box.addLayout(growth_axis_layout)
 
-        self.chk_group_resizes = QCheckBox("Група змінює розмір")
+        self.chk_group_resizes = QCheckBox("Група розтягується (дозволити правила росту)")
         self.chk_group_resizes.stateChanged.connect(self.on_group_resizes_changed)
         group_box.addWidget(self.chk_group_resizes)
+
+        self.btn_group_proportional = QPushButton("Пропорційний зсув + ріст")
+        self.btn_group_proportional.setToolTip(
+            "Автоматично розрахувати зсув центра та частку росту групи "
+            "відносно габаритів усього креслення"
+        )
+        self.btn_group_proportional.clicked.connect(self.apply_proportional_rule_to_group)
+        self.btn_group_proportional.setEnabled(False)
+        group_box.addWidget(self.btn_group_proportional)
 
         grid = QGridLayout()
         self.param_transform_grid = grid
@@ -16791,9 +16801,24 @@ class MiniCAD(QMainWindow):
         selected = self.group_list_widget.selectedItems()
         if not selected:
             return
-        self.record_action_snapshot()
         idx = selected[0].data(Qt.ItemDataRole.UserRole)
-        self.apply_rule_to_group(self.parametric_groups[idx], self.combo_rule_library.currentText())
+        group = self.parametric_groups[idx]
+        rule_name = self.combo_rule_library.currentText()
+        rule = self.rule_library().get(rule_name) or {}
+        has_growth = (
+            abs(float(rule.get("growth_p_w", 0.0) or 0.0)) > 0.000001 or
+            abs(float(rule.get("growth_p_h", 0.0) or 0.0)) > 0.000001
+        )
+        if has_growth and not self.group_resizes(group):
+            QMessageBox.information(
+                self,
+                "Правило росту",
+                "Спочатку увімкніть 'Група розтягується'. "
+                "Без цієї позначки правила росту не застосовуються.",
+            )
+            return
+        self.record_action_snapshot()
+        self.apply_rule_to_group(group, rule_name)
         self.save_project_config()
         self.on_group_selection_changed()
         self.update_viewer()
@@ -20333,6 +20358,7 @@ class MiniCAD(QMainWindow):
             self.chk_group_resizes.setChecked(False)
             self.chk_group_resizes.blockSignals(False)
             self.apply_group_controls_visibility(None)
+            self.btn_group_proportional.setEnabled(False)
             return
         
         idx = selected[0].data(Qt.ItemDataRole.UserRole)
@@ -20360,6 +20386,7 @@ class MiniCAD(QMainWindow):
             widget.blockSignals(False)
 
         self.apply_group_controls_visibility(group)
+        self.btn_group_proportional.setEnabled(self.group_resizes(group))
         self.selected_handles = set(group["handles"])
         self.sync_list_from_handles()
         self.update_viewer()
@@ -20564,6 +20591,8 @@ class MiniCAD(QMainWindow):
         self.set_param_grid_row_visible(2, show_y)
         self.set_param_grid_row_visible(1, show_x and show_growth)
         self.set_param_grid_row_visible(3, show_y and show_growth)
+        if hasattr(self, "btn_group_proportional"):
+            self.btn_group_proportional.setEnabled(bool(group) and show_growth)
         
 
     def sync_link_combos_from_file_mode(self):
@@ -20668,6 +20697,70 @@ class MiniCAD(QMainWindow):
         self.on_group_selection_changed()
         self.update_viewer()
 
+    def apply_proportional_rule_to_group(self):
+        selected = self.group_list_widget.selectedItems()
+        if not selected:
+            return
+        idx = selected[0].data(Qt.ItemDataRole.UserRole)
+        if idx is None or idx < 0 or idx >= len(self.parametric_groups):
+            return
+
+        group = self.parametric_groups[idx]
+        if not self.group_resizes(group):
+            QMessageBox.information(
+                self,
+                "Пропорційне правило",
+                "Спочатку увімкніть 'Група розтягується'.",
+            )
+            return
+
+        group_bbox = self.group_original_bbox(group)
+        min_x, min_y, max_x, max_y = self.get_dxf_bounds()
+        if not group_bbox or min_x is None:
+            QMessageBox.warning(
+                self,
+                "Пропорційне правило",
+                "Не вдалося визначити габарити групи або креслення.",
+            )
+            return
+
+        door_w = max(float(max_x - min_x), 0.000001)
+        door_h = max(float(max_y - min_y), 0.000001)
+        group_min_x, group_min_y, group_max_x, group_max_y = group_bbox
+        group_w = max(float(group_max_x - group_min_x), 0.0)
+        group_h = max(float(group_max_y - group_min_y), 0.0)
+        center_x = (group_min_x + group_max_x) * 0.5
+        center_y = (group_min_y + group_max_y) * 0.5
+        axis = self.normalize_growth_axis(self.project_meta.get("growth_axis", "both"))
+
+        self.record_action_snapshot()
+        if axis in ("both", "width"):
+            group["k_w"] = round(max(0.0, min(1.0, (center_x - min_x) / door_w)), 6)
+            group["growth_p_w"] = round(max(0.0, min(1.0, group_w / door_w)), 6)
+            group["growth_dir_x"] = "Центр"
+            group["shift_dir_x"] = "Вправо"
+        else:
+            group["growth_p_w"] = 0.0
+            group["growth_dir_x"] = "Центр"
+
+        if axis in ("both", "height"):
+            group["k_h"] = round(max(0.0, min(1.0, (center_y - min_y) / door_h)), 6)
+            group["growth_p_h"] = round(max(0.0, min(1.0, group_h / door_h)), 6)
+            group["growth_dir_y"] = "Центр"
+            group["shift_dir_y"] = "Вгору"
+        else:
+            group["growth_p_h"] = 0.0
+            group["growth_dir_y"] = "Центр"
+
+        self.apply_growth_axis_to_group(group)
+        self.save_project_config()
+        self.on_group_selection_changed()
+        self.update_viewer()
+        self.lbl_status_calc.setText(
+            "Пропорційне правило застосовано: центр групи визначає зсув, "
+            "її частка у габариті визначає ріст."
+        )
+
     def on_combo_k_w_changed(self, text):
         selected = self.group_list_widget.selectedItems()
         if not selected: return
@@ -20689,6 +20782,8 @@ class MiniCAD(QMainWindow):
         if not selected: return
         self.record_action_snapshot()
         idx = selected[0].data(Qt.ItemDataRole.UserRole)
+        if not self.group_resizes(self.parametric_groups[idx]):
+            return
         self.parametric_groups[idx]["growth_p_w"] = parse_factor(text)
         self.save_project_config()
 
@@ -20697,6 +20792,8 @@ class MiniCAD(QMainWindow):
         if not selected: return
         self.record_action_snapshot()
         idx = selected[0].data(Qt.ItemDataRole.UserRole)
+        if not self.group_resizes(self.parametric_groups[idx]):
+            return
         self.parametric_groups[idx]["growth_p_h"] = parse_factor(text)
         self.save_project_config()
 
@@ -20728,6 +20825,8 @@ class MiniCAD(QMainWindow):
         if not selected: return
         self.record_action_snapshot()
         idx = selected[0].data(Qt.ItemDataRole.UserRole)
+        if not self.group_resizes(self.parametric_groups[idx]):
+            return
         self.parametric_groups[idx]["growth_dir_x"] = text
         self.save_project_config()
 
@@ -20736,6 +20835,8 @@ class MiniCAD(QMainWindow):
         if not selected: return
         self.record_action_snapshot()
         idx = selected[0].data(Qt.ItemDataRole.UserRole)
+        if not self.group_resizes(self.parametric_groups[idx]):
+            return
         self.parametric_groups[idx]["growth_dir_y"] = text
         self.save_project_config()
 
@@ -20954,6 +21055,7 @@ class MiniCAD(QMainWindow):
             ratio_y = self.auto_layout_dimension_ratio(bbox, bounds, "y")
 
             axis = self.project_meta.get("growth_axis", "both")
+            can_resize = self.group_resizes(group)
             if axis == "width":
                 grow_x, grow_y = True, False
             elif axis == "height":
@@ -20963,6 +21065,8 @@ class MiniCAD(QMainWindow):
             else:
                 grow_x = ratio_x >= 0.55
                 grow_y = ratio_y >= 0.55
+            grow_x = bool(grow_x and can_resize)
+            grow_y = bool(grow_y and can_resize)
             group["link_x"] = "X = W"
             group["link_y"] = "Y = H"
             group["shift_dir_x"] = "Вправо"
