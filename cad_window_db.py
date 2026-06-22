@@ -15564,43 +15564,28 @@ class MiniCAD(QMainWindow):
         self.lbl_status_calc.setStyleSheet("color: #4fc3f7; font-size: 11px;")
         auto_scale_box.addWidget(self.lbl_status_calc)
 
-        self.btn_apply_auto_scale = QPushButton(" Запустити глобальний перерахунок")
-        self.btn_apply_auto_scale.setStyleSheet("background-color: #007acc; color: white; font-weight: bold; padding: 6px;")
-        self.btn_apply_auto_scale.clicked.connect(lambda: self.process_parametric_percentage_scale())
-        auto_scale_box.addWidget(self.btn_apply_auto_scale)
+        size_action_buttons = QHBoxLayout()
 
-        preview_buttons = QHBoxLayout()
         self.btn_preview_scale = QPushButton("Перегляд")
         self.btn_preview_scale.clicked.connect(self.preview_parametric_scale)
-        preview_buttons.addWidget(self.btn_preview_scale)
+        size_action_buttons.addWidget(self.btn_preview_scale)
 
-        self.btn_restore_current = QPushButton("Повернути базу")
-        self.btn_restore_current.clicked.connect(self.restore_current_dxf_from_disk)
-        preview_buttons.addWidget(self.btn_restore_current)
-        auto_scale_box.addLayout(preview_buttons)
+        self.btn_apply_auto_scale = QPushButton("Застосувати розміри")
+        self.btn_apply_auto_scale.setStyleSheet("background-color: #007acc; color: white; font-weight: bold; padding: 6px;")
+        self.btn_apply_auto_scale.clicked.connect(lambda: self.process_parametric_percentage_scale())
+        size_action_buttons.addWidget(self.btn_apply_auto_scale)
+        auto_scale_box.addLayout(size_action_buttons)
 
-        workflow_buttons = QHBoxLayout()
-        self.btn_remember_source_size = QPushButton("Запам'ятати початкові")
-        self.btn_remember_source_size.clicked.connect(self.remember_source_dimensions)
-        workflow_buttons.addWidget(self.btn_remember_source_size)
-
-        self.btn_import_params = QPushButton("Excel/CSV параметри")
-        self.btn_import_params.clicked.connect(self.import_parameters_from_table)
-        workflow_buttons.addWidget(self.btn_import_params)
-
-        self.btn_order_wizard = QPushButton("Нове замовлення")
-        self.btn_order_wizard.clicked.connect(self.quick_order_wizard)
-        workflow_buttons.addWidget(self.btn_order_wizard)
-        auto_scale_box.addLayout(workflow_buttons)
-
-        self.btn_export_new_dxf = QPushButton("Створити новий DXF")
+        export_buttons = QHBoxLayout()
+        self.btn_export_new_dxf = QPushButton("Експорт ZIP")
         self.btn_export_new_dxf.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold; padding: 6px;")
         self.btn_export_new_dxf.clicked.connect(self.export_new_dxf_with_dimensions)
-        auto_scale_box.addWidget(self.btn_export_new_dxf)
+        export_buttons.addWidget(self.btn_export_new_dxf)
 
-        self.btn_batch_export = QPushButton("Пакет з Excel/CSV")
+        self.btn_batch_export = QPushButton("Пакет Excel → ZIP")
         self.btn_batch_export.clicked.connect(self.batch_export_from_table)
-        auto_scale_box.addWidget(self.btn_batch_export)
+        export_buttons.addWidget(self.btn_batch_export)
+        auto_scale_box.addLayout(export_buttons)
 
         # self.btn_find_min_size = QPushButton("Мінімум без накладання")
         # self.btn_find_min_size.clicked.connect(self.find_minimum_safe_size)
@@ -18146,15 +18131,31 @@ class MiniCAD(QMainWindow):
         return {"zip_path": zip_path}
 
     def batch_job_model_key(self, job):
-        for key in ("model_id", "door_model_id", "model", "model_name", "door_model", "model_folder", "folder_path"):
+        for key in ("model_id", "door_model_id", "model", "model_name", "door_model", "article", "door_type", "model_folder", "folder_path"):
             value = job.get(key)
             if value not in (None, ""):
                 return key, str(value).strip()
         return None, ""
 
     def resolve_batch_job_model(self, job, models):
-        key, value = self.batch_job_model_key(job)
-        if not value:
+        id_values = [
+            str(job.get(key)).strip()
+            for key in ("model_id", "door_model_id")
+            if job.get(key) not in (None, "")
+        ]
+        for value in id_values:
+            for model in models:
+                if str(model.get("id")) == value:
+                    return model, None
+            return None, f"модель id={value} не знайдена"
+
+        search_values = []
+        for key in ("model", "model_name", "door_model", "article", "door_type", "model_folder", "folder_path"):
+            value = str(job.get(key) or "").strip()
+            if value and value.lower() not in {item.lower() for item in search_values}:
+                search_values.append(value)
+
+        if not search_values:
             current_id = getattr(self, "current_door_model_id", None) or getattr(self, "selected_db_model_id", None)
             if current_id:
                 for model in models:
@@ -18162,28 +18163,26 @@ class MiniCAD(QMainWindow):
                         return model, None
             return None, None
 
-        if key in ("model_id", "door_model_id"):
+        for value in search_values:
+            needle = value.lower()
             for model in models:
-                if str(model.get("id")) == value:
+                candidates = [
+                    str(model.get("id") or ""),
+                    str(model.get("model_name") or ""),
+                    os.path.basename(str(model.get("folder_path") or "")),
+                    str(model.get("folder_path") or ""),
+                ]
+                if any(needle == candidate.lower() for candidate in candidates if candidate):
                     return model, None
-            return None, f"модель id={value} не знайдена"
 
-        needle = value.lower()
-        for model in models:
-            candidates = [
-                str(model.get("id") or ""),
-                str(model.get("model_name") or ""),
-                os.path.basename(str(model.get("folder_path") or "")),
-                str(model.get("folder_path") or ""),
-            ]
-            if any(needle == candidate.lower() for candidate in candidates if candidate):
-                return model, None
-        for model in models:
-            name = str(model.get("model_name") or "").lower()
-            folder = str(model.get("folder_path") or "").lower()
-            if needle and (needle in name or needle in folder):
-                return model, None
-        return None, f"модель '{value}' не знайдена"
+        for value in search_values:
+            needle = value.lower()
+            for model in models:
+                name = str(model.get("model_name") or "").lower()
+                folder = str(model.get("folder_path") or "").lower()
+                if needle and (needle in name or needle in folder or name in needle):
+                    return model, None
+        return None, f"модель не знайдена за значеннями: {', '.join(search_values)}"
 
     def batch_source_entries_for_model(self, model):
         if model and getattr(self, "db", None):
@@ -18366,6 +18365,9 @@ class MiniCAD(QMainWindow):
                         self.apply_opening_to_export_doc(export_doc)
 
                         export_name = self.build_export_file_name(target_w, target_h)
+                        order_number = self.sanitize_model_name(job.get("order_number"), fallback="")
+                        if order_number:
+                            export_name = f"{order_number}_{export_name}"
                         model_dir = self.batch_download_dir_for_job(temp_root, model, target_w, target_h)
                         source_folder = str(entry.get("folder") or (entry.get("record") or {}).get("folder") or "")
                         target_dir = os.path.join(model_dir, source_folder) if source_folder else model_dir

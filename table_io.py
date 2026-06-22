@@ -27,10 +27,22 @@ OPENING_KEYS = {
 BLOCK_LIST_KEYS = {"keep_blocks", "delete_blocks"}
 MODEL_TEXT_KEYS = {"model", "model_name", "door_model", "model_folder", "folder_path"}
 MODEL_NUMERIC_KEYS = {"model_id", "door_model_id"}
+JOB_TEXT_KEYS = {"order_number", "article", "door_type"}
 
 
 def normalize_key(value):
     text = str(value).strip().lower()
+    compact = re.sub(r"\s+", " ", text)
+    if "номер замовлення" in compact or "номер заказа" in compact:
+        return "order_number"
+    if "висота двер" in compact or "высота двер" in compact:
+        return "target_height"
+    if "ширина двер" in compact:
+        return "target_width"
+    if "артикул" in compact and "doorcad" in compact:
+        return "model"
+    if "хар.род" in compact and "двер" in compact:
+        return "door_type"
     replacements = {
         "ширина": "target_width",
         "width": "target_width",
@@ -126,6 +138,16 @@ def read_csv_rows(path):
 
 def read_xlsx_rows(path):
     ns = {"a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+
+    def column_index(cell_ref):
+        letters = re.match(r"[A-Za-z]+", str(cell_ref or ""))
+        if not letters:
+            return None
+        result = 0
+        for char in letters.group(0).upper():
+            result = result * 26 + (ord(char) - ord("A") + 1)
+        return result - 1
+
     with zipfile.ZipFile(path) as zf:
         shared = []
         if "xl/sharedStrings.xml" in zf.namelist():
@@ -138,11 +160,20 @@ def read_xlsx_rows(path):
         for row in root.findall(".//a:row", ns):
             values = []
             for cell in row.findall("a:c", ns):
+                idx = column_index(cell.attrib.get("r"))
+                if idx is not None:
+                    while len(values) < idx:
+                        values.append("")
                 raw = cell.find("a:v", ns)
                 text = raw.text if raw is not None else ""
                 if cell.attrib.get("t") == "s" and text:
                     text = shared[int(text)]
-                values.append(text)
+                elif cell.attrib.get("t") == "inlineStr":
+                    text = "".join(node.text or "" for node in cell.findall(".//a:t", ns))
+                if idx is None or idx == len(values):
+                    values.append(text)
+                elif idx < len(values):
+                    values[idx] = text
             if any(str(v).strip() for v in values):
                 rows.append(values)
         return rows
@@ -158,6 +189,10 @@ def add_value(params, key, value, parse_numeric_text):
         if num is not None:
             params[key] = int(num)
     elif key in MODEL_TEXT_KEYS:
+        text_value = str(value).strip()
+        if text_value:
+            params[key] = text_value
+    elif key in JOB_TEXT_KEYS:
         text_value = str(value).strip()
         if text_value:
             params[key] = text_value
