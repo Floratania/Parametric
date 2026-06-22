@@ -37,6 +37,45 @@ JOB_TEXT_KEYS = {"order_number", "article", "door_type"}
 def normalize_key(value):
     text = str(value).strip().lower()
     compact = re.sub(r"\s+", " ", text)
+
+    # Production Excel headers used by DoorCad exports. Keep these checks
+    # before legacy aliases so they work independently of older file encodings.
+    if "номер замовлення" in compact or "номер заказа" in compact:
+        return "order_number"
+    if "висота двер" in compact or "высота двер" in compact:
+        return "target_height"
+    if "ширина двер" in compact:
+        return "target_width"
+    if "артикул" in compact and "doorcad" in compact:
+        return "model"
+    if ("хар.род" in compact or "хар. род" in compact) and "двер" in compact:
+        return "door_type"
+
+    clean_replacements = {
+        "ширина": "target_width",
+        "нова ширина": "target_width",
+        "висота": "target_height",
+        "нова висота": "target_height",
+        "початкова ширина": "source_width",
+        "поточна ширина": "source_width",
+        "початкова висота": "source_height",
+        "поточна висота": "source_height",
+        "модель": "model",
+        "назва моделі": "model",
+        "id моделі": "model_id",
+        "папка моделі": "model_folder",
+        "видалити": "delete_blocks",
+        "лишити": "keep_blocks",
+        "залишити": "keep_blocks",
+        "текст": "text",
+        "шрифт": "font",
+        "розмір шрифту": "font_size",
+        "відкривання": "door_opening",
+        "початкове відкривання": "source_door_opening",
+        "цільове відкривання": "target_door_opening",
+    }
+    if compact in clean_replacements:
+        return clean_replacements[compact]
     if "номер замовлення" in compact or "номер заказа" in compact:
         return "order_number"
     if "projectfileid" in compact or "project_file_id" in compact or "id файлу" in compact or "id файла" in compact:

@@ -15282,7 +15282,7 @@ class MiniCAD(QMainWindow):
             "source_door_opening": "right" if combo_opening.currentText() == "Праве" else "left",
         }
 
-    def batch_import_models_from_folder(self):
+    def batch_import_models_from_folder(self, parent_folder=None, import_as_single=False):
         if not getattr(self, "db", None) or not getattr(self.db, "available", False):
             QMessageBox.warning(self, "Пакетний імпорт", "БД недоступна.")
             return
@@ -15290,16 +15290,21 @@ class MiniCAD(QMainWindow):
             QMessageBox.warning(self, "Пакетний імпорт", "Користувач не визначений.")
             return
 
-        parent_folder = QFileDialog.getExistingDirectory(
-            self,
-            "Виберіть папку, де лежать моделі дверей",
-            self.project_dir if not self.is_db_uri(getattr(self, "project_dir", "")) else os.getcwd(),
-        )
+        if not parent_folder:
+            parent_folder = QFileDialog.getExistingDirectory(
+                self,
+                "Виберіть папку, де лежать моделі дверей",
+                self.project_dir if not self.is_db_uri(getattr(self, "project_dir", "")) else os.getcwd(),
+            )
         if not parent_folder:
             return
 
         parent_folder = os.path.abspath(parent_folder)
-        model_folders = self.batch_model_folders_from_parent(parent_folder)
+        model_folders = (
+            [parent_folder]
+            if import_as_single and self.folder_has_dxf_recursive(parent_folder)
+            else self.batch_model_folders_from_parent(parent_folder)
+        )
         if not model_folders:
             QMessageBox.information(
                 self,
@@ -15838,7 +15843,7 @@ class MiniCAD(QMainWindow):
         self.btn_open_file.clicked.connect(self.open_dxf_from_dialog)
         folder_explorer_layout.addWidget(self.btn_open_file)
 
-        self.btn_open_folder = QPushButton("📁 Відкрити папку...")
+        self.btn_open_folder = QPushButton("📁 Відкрити / імпортувати папку...")
         self.btn_open_folder.setStyleSheet("background-color: #37474f; color: white; font-weight: bold; padding: 4px;")
         self.btn_open_folder.clicked.connect(self.open_folder_from_dialog)
         folder_explorer_layout.addWidget(self.btn_open_folder)
@@ -19341,10 +19346,25 @@ class MiniCAD(QMainWindow):
                             skipped += 1
                             continue
 
+                        source_w = self.project_meta.get("source_width")
+                        source_h = self.project_meta.get("source_height")
+                        if source_w is None or source_h is None:
+                            failed.append(f"рядок {row_index}: модель не має початкових W/H")
+                            skipped += 1
+                            continue
+
                         self.is_loading_history = True
                         self.suppress_project_config_save = True
                         try:
-                            ok_to_export = self.process_parametric_percentage_scale(save_result=True, record_history=False)
+                            ok_to_export = self.process_parametric_percentage_scale(
+                                save_result=True,
+                                record_history=False,
+                                current_width=source_w,
+                                current_height=source_h,
+                                target_width=target_w,
+                                target_height=target_h,
+                                collect_ui_values=False,
+                            )
                         finally:
                             self.suppress_project_config_save = False
                             self.is_loading_history = False
@@ -19563,6 +19583,29 @@ class MiniCAD(QMainWindow):
         )
         if not folder_path:
             return
+
+        if getattr(self, "db", None) and getattr(self.db, "available", False) and self.current_user_id():
+            actions = [
+                "Відкрити для редагування",
+                "Імпортувати вибрану папку як одну модель",
+                "Імпортувати кожну підпапку як окрему модель",
+            ]
+            action, accepted = QInputDialog.getItem(
+                self,
+                "Робота з папкою",
+                "Що зробити з вибраною папкою?",
+                actions,
+                0,
+                False,
+            )
+            if not accepted:
+                return
+            if action == actions[1]:
+                self.batch_import_models_from_folder(folder_path, import_as_single=True)
+                return
+            if action == actions[2]:
+                self.batch_import_models_from_folder(folder_path, import_as_single=False)
+                return
 
         old_state = {
             "project_dir": getattr(self, "project_dir", None),
@@ -22278,16 +22321,26 @@ class MiniCAD(QMainWindow):
             print("=" * 90 + "\n")
         return extra
 
-    def process_parametric_percentage_scale(self, save_result=True, record_history=True):
+    def process_parametric_percentage_scale(
+        self,
+        save_result=True,
+        record_history=True,
+        current_width=None,
+        current_height=None,
+        target_width=None,
+        target_height=None,
+        collect_ui_values=True,
+    ):
         try:
-            cur_w = float(self.input_current_width.text().strip())
-            target_w = float(self.input_target_width.text().strip())
-            cur_h = float(self.input_current_height.text().strip())
-            target_h = float(self.input_target_height.text().strip())
-        except ValueError:
+            cur_w = float(current_width) if current_width is not None else float(self.input_current_width.text().strip())
+            target_w = float(target_width) if target_width is not None else float(self.input_target_width.text().strip())
+            cur_h = float(current_height) if current_height is not None else float(self.input_current_height.text().strip())
+            target_h = float(target_height) if target_height is not None else float(self.input_target_height.text().strip())
+        except (TypeError, ValueError):
             return False
 
-        self.collect_text_settings_from_inputs()
+        if collect_ui_values:
+            self.collect_text_settings_from_inputs()
         if not self.validate_target_size_or_warn(cur_w, cur_h, target_w, target_h):
             return False
 
