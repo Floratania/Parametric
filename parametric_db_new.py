@@ -3847,6 +3847,51 @@ class ParametricDb:
             self.last_error = str(exc)
             return []
 
+    def list_group_name_templates(self, active_only: bool = True) -> List[Dict[str, Any]]:
+        try:
+            where = "WHERE IsActive = 1" if active_only else ""
+            with self.connect() as conn:
+                rows = conn.cursor().execute(
+                    f"""
+                    SELECT Id, Name, Description, SortOrder, IsActive, CreatedByUserId, CreatedAt
+                    FROM dbo.GroupNameTemplates
+                    {where}
+                    ORDER BY COALESCE(SortOrder, 2147483647), Name, Id
+                    """
+                ).fetchall()
+            return [
+                {
+                    "id": int(row.Id),
+                    "name": str(row.Name or "").strip(),
+                    "description": row.Description,
+                    "sort_order": int(row.SortOrder or 0),
+                    "is_active": bool(row.IsActive),
+                    "created_by_user_id": int(row.CreatedByUserId) if row.CreatedByUserId else None,
+                    "created_at": row.CreatedAt,
+                }
+                for row in rows
+            ]
+        except Exception as exc:
+            self.last_error = str(exc)
+            return []
+
+    def deactivate_group_name_template(self, template_id: int) -> bool:
+        try:
+            with self.connect() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    "UPDATE dbo.GroupNameTemplates SET IsActive = 0 WHERE Id = ?",
+                    template_id,
+                )
+                if cur.rowcount == 0:
+                    self.last_error = f"Назву групи Id={template_id} не знайдено."
+                    return False
+                conn.commit()
+            return True
+        except Exception as exc:
+            self.last_error = str(exc)
+            return False
+
     def add_group_name_template(self, name: str, user_id: int) -> Optional[int]:
         name = str(name or "").strip()
         if not name:

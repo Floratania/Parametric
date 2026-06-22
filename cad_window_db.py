@@ -14039,6 +14039,44 @@ class MiniCAD(QMainWindow):
         else:
             QMessageBox.warning(self, "Адмін", f"Не вдалося додати назву:\n{self.db.last_error}")
 
+    def admin_delete_group_name(self):
+        if not self.admin_require():
+            return
+        templates = self.db.list_group_name_templates(active_only=True)
+        if not templates:
+            QMessageBox.information(self, "Адмін", "Немає активних назв груп для видалення.")
+            return
+        labels = []
+        by_label = {}
+        for template in templates:
+            label = f"{template.get('id')} | {template.get('name')}"
+            labels.append(label)
+            by_label[label] = template
+        label, ok = QInputDialog.getItem(
+            self,
+            "Видалити назву групи",
+            "Виберіть назву:",
+            labels,
+            0,
+            False,
+        )
+        if not ok or not label:
+            return
+        template = by_label[label]
+        answer = QMessageBox.question(
+            self,
+            "Видалити назву групи",
+            f"Прибрати назву '{template.get('name')}' зі списку конструктора?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        if self.db.deactivate_group_name_template(int(template.get("id"))):
+            QMessageBox.information(self, "Адмін", "Назву групи видалено зі списку.")
+        else:
+            QMessageBox.warning(self, "Адмін", f"Не вдалося видалити назву:\n{self.db.last_error}")
+
     def rule_from_group(self, group):
         return {
             "k_w": float(group.get("k_w", 0.0) or 0.0),
@@ -15912,6 +15950,9 @@ class MiniCAD(QMainWindow):
         self.btn_admin_add_group_name = QPushButton("Додати назву групи")
         self.btn_admin_add_group_name.clicked.connect(self.admin_add_group_name)
         admin_box.addWidget(self.btn_admin_add_group_name)
+        self.btn_admin_delete_group_name = QPushButton("Видалити назву групи")
+        self.btn_admin_delete_group_name.clicked.connect(self.admin_delete_group_name)
+        admin_box.addWidget(self.btn_admin_delete_group_name)
         self.btn_admin_save_rule = QPushButton("Зберегти правило з вибраної групи")
         self.btn_admin_save_rule.clicked.connect(self.admin_save_selected_group_rule)
         admin_box.addWidget(self.btn_admin_save_rule)
