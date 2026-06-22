@@ -15868,19 +15868,24 @@ class MiniCAD(QMainWindow):
         self.view.setDragMode(QGraphicsView.DragMode.RubberBandDrag) 
 
         self.scroll_area = QScrollArea()
+        self.scroll_area.setObjectName("sideScrollArea")
+        self.scroll_area.viewport().setObjectName("sideScrollViewport")
         self.scroll_area.setWidgetResizable(True) 
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         
         control_panel = QWidget()
+        control_panel.setObjectName("sideControlPanel")
         control_panel_layout = QVBoxLayout(control_panel)
-        control_panel_layout.setContentsMargins(5, 5, 5, 5)
+        control_panel_layout.setContentsMargins(8, 8, 8, 8)
+        control_panel_layout.setSpacing(10)
         self.scroll_area.setWidget(control_panel)
         self.add_main_panel(self.scroll_area, "side", stretch=4)
 
         self.file_status_group = QGroupBox("Стан файлу")
         file_status_box = QGridLayout()
-        file_status_box.setSpacing(4) 
-        file_status_box.setContentsMargins(6, 12, 6, 6)
+        file_status_box.setHorizontalSpacing(10)
+        file_status_box.setVerticalSpacing(8)
+        file_status_box.setContentsMargins(8, 16, 8, 8)
 
         self.lbl_file_status_source = QLabel("")
         self.lbl_file_status_target = QLabel("")
@@ -15959,8 +15964,8 @@ class MiniCAD(QMainWindow):
             self.tab_text_layout,
             self.tab_more_layout,
         ):
-            layout.setContentsMargins(3, 3, 3, 3)
-            layout.setSpacing(4)
+            layout.setContentsMargins(8, 8, 8, 8)
+            layout.setSpacing(8)
         self.side_tabs.addTab(self.tab_file, "Файл")
         self.side_tabs.addTab(self.tab_sizes, "Розміри")
         self.side_tabs.addTab(self.tab_groups, "Групи")
@@ -22135,6 +22140,10 @@ class MiniCAD(QMainWindow):
             QMainWindow, QDialog, #MiniCADShell { background: %(window)s; }
             #folderHost, #sideHost { background: %(surface)s; border: 1px solid %(border)s; }
             #viewHost { background: %(window)s; border: none; }
+            #sideScrollArea, #sideScrollViewport, #sideControlPanel,
+            #sideControlPanel > QTabWidget, #sideControlPanel QTabWidget::pane {
+                background: %(surface)s;
+            }
             QWidget { color: %(text)s; font-family: "Segoe UI"; font-size: 12px; }
             QScrollArea, QAbstractScrollArea { border: none; background: transparent; }
             QTabWidget::pane { background: %(surface)s; border: 1px solid %(border)s; top: -1px; }
@@ -22149,7 +22158,7 @@ class MiniCAD(QMainWindow):
             }
             QGroupBox {
                 background: %(surface)s; border: 1px solid %(border)s; border-radius: 6px;
-                margin-top: 14px; padding: 14px 8px 8px 8px; font-weight: 600;
+                margin-top: 17px; padding: 17px 10px 10px 10px; font-weight: 600;
             }
             QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: %(text)s; }
             QPushButton {
