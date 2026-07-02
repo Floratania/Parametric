@@ -2930,24 +2930,24 @@ from PySide6.QtWidgets import (
 class LoginDialog(QDialog):
     def __init__(self, parent=None, message="Р’С…С–Рґ"):
         super().__init__(parent)
-        self.setWindowTitle("РђРІС‚РѕСЂРёР·Р°С†С–СЏ")
+        self.setWindowTitle("Авторизація")
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(message))
 
         self.username_input = QLineEdit()
-        self.username_input.setPlaceholderText("Р›РѕРіС–РЅ")
+        self.username_input.setPlaceholderText("Логін")
 
         self.password_input = QLineEdit()
-        self.password_input.setPlaceholderText("РџР°СЂРѕР»СЊ")
+        self.password_input.setPlaceholderText("Пароль")
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
 
         layout.addWidget(self.username_input)
         layout.addWidget(self.password_input)
 
         buttons = QHBoxLayout()
-        btn_ok = QPushButton("РЈРІС–Р№С‚Рё")
-        btn_cancel = QPushButton("РЎРєР°СЃСѓРІР°С‚Рё")
+        btn_ok = QPushButton("Ок")
+        btn_cancel = QPushButton("Скасувати")
 
         btn_ok.clicked.connect(self.accept)
         btn_cancel.clicked.connect(self.reject)
@@ -3018,7 +3018,7 @@ class ParametricDb:
 
     def connect(self):
         if pyodbc is None:
-            raise RuntimeError("pyodbc РЅРµ РІСЃС‚Р°РЅРѕРІР»РµРЅРѕ")
+            raise RuntimeError("pyodbc")
         return pyodbc.connect(self.connection_string(), autocommit=False)
 
     def _check_connection(self) -> bool:
@@ -3061,6 +3061,7 @@ class ParametricDb:
         dxf_bytes: Optional[bytes] = None,
         file_name_override: Optional[str] = None,
         folder_override: Optional[str] = None,
+        force_new: bool = False,
     ) -> Optional[int]:
         """
         Р РµС”СЃС‚СЂСѓС” РїР°РїРєСѓ СЏРє DoorModel С‚Р° РІСЃС– DXF-С„Р°Р№Р»Рё РІСЃРµСЂРµРґРёРЅС–.
@@ -3105,6 +3106,7 @@ class ParametricDb:
                     source_height=source_height,
                     source_door_opening=source_opening,
                     user_id=user_id,
+                    force_new=force_new,
                 )
             else:
                 self.update_door_model_from_meta(door_model_id, project_meta, user_id)
@@ -3134,7 +3136,10 @@ class ParametricDb:
 
                     ext = os.path.splitext(file_name)[1] or ".dxf"
 
-                    if has_folder_col:
+                    existing_id = None
+                    if force_new:
+                        existing_id = None
+                    elif has_folder_col:
                         existing_id = self._scalar(
                             cur,
                             """
@@ -3356,6 +3361,64 @@ class ParametricDb:
                 return True
             with self.connect() as conn:
                 conn.cursor().execute("ALTER TABLE dbo.ProjectFiles ADD Folder NVARCHAR(500) NULL")
+                conn.commit()
+            return True
+        except Exception as exc:
+            self.last_error = str(exc)
+            return False
+
+    def ensure_growth_preset_table(self) -> bool:
+        try:
+            with self.connect() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    IF OBJECT_ID(N'dbo.GrowthPresetTemplates', N'U') IS NULL
+                    BEGIN
+                        CREATE TABLE dbo.GrowthPresetTemplates (
+                            Id INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+                            Label NVARCHAR(100) NOT NULL,
+                            FactorValue FLOAT NOT NULL,
+                            Description NVARCHAR(500) NULL,
+                            SortOrder INT NOT NULL CONSTRAINT DF_GrowthPresetTemplates_SortOrder DEFAULT (0),
+                            IsActive BIT NOT NULL CONSTRAINT DF_GrowthPresetTemplates_IsActive DEFAULT (1),
+                            CreatedByUserId INT NULL,
+                            CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_GrowthPresetTemplates_CreatedAt DEFAULT (SYSDATETIME())
+                        );
+                    END
+                    """
+                )
+                defaults = [
+                    ("0% (Фіксовано)", 0.0, 10),
+                    ("25% (1/4)", 0.25, 20),
+                    ("33.3% (1/3)", 1.0 / 3.0, 30),
+                    ("50% (Центр / Δ/2)", 0.5, 40),
+                    ("66.7% (2/3)", 2.0 / 3.0, 50),
+                    ("75% (1/4)", 0.75, 60),
+                    ("100% (Δ/1)", 1.0, 70),
+                ]
+                for label, value, sort_order in defaults:
+                    existing_id = self._scalar(
+                        cur,
+                        """
+                        SELECT TOP 1 Id
+                        FROM dbo.GrowthPresetTemplates
+                        WHERE LOWER(LTRIM(RTRIM(Label))) = LOWER(?)
+                        """,
+                        label,
+                    )
+                    if existing_id is None:
+                        cur.execute(
+                            """
+                            INSERT INTO dbo.GrowthPresetTemplates
+                            (Label, FactorValue, Description, SortOrder, IsActive, CreatedByUserId, CreatedAt)
+                            VALUES (?, ?, ?, ?, 1, NULL, SYSDATETIME())
+                            """,
+                            label,
+                            float(value),
+                            "Типовий відсотковий пресет",
+                            int(sort_order),
+                        )
                 conn.commit()
             return True
         except Exception as exc:
@@ -3966,6 +4029,125 @@ class ParametricDb:
             self.last_error = str(exc)
             return None
 
+    def list_growth_preset_templates(self, active_only: bool = True) -> List[Dict[str, Any]]:
+        try:
+            if not self.ensure_growth_preset_table():
+                return []
+            where = "WHERE IsActive = 1" if active_only else ""
+            with self.connect() as conn:
+                rows = conn.cursor().execute(
+                    f"""
+                    SELECT Id, Label, FactorValue, Description, SortOrder, IsActive, CreatedByUserId, CreatedAt
+                    FROM dbo.GrowthPresetTemplates
+                    {where}
+                    ORDER BY COALESCE(SortOrder, 2147483647), FactorValue, Label, Id
+                    """
+                ).fetchall()
+            return [
+                {
+                    "id": int(row.Id),
+                    "label": str(row.Label or "").strip(),
+                    "factor_value": float(row.FactorValue or 0.0),
+                    "description": row.Description,
+                    "sort_order": int(row.SortOrder or 0),
+                    "is_active": bool(row.IsActive),
+                    "created_by_user_id": int(row.CreatedByUserId) if row.CreatedByUserId else None,
+                    "created_at": row.CreatedAt,
+                }
+                for row in rows
+            ]
+        except Exception as exc:
+            self.last_error = str(exc)
+            return []
+
+    def list_growth_preset_labels(self) -> List[str]:
+        return [
+            row["label"]
+            for row in self.list_growth_preset_templates(active_only=True)
+            if row.get("label")
+        ]
+
+    def add_growth_preset_template(self, label: str, factor_value: float, user_id: int) -> Optional[int]:
+        label = str(label or "").strip()
+        if not label:
+            self.last_error = "Назва пресета порожня."
+            return None
+        try:
+            value = float(factor_value)
+        except (TypeError, ValueError):
+            self.last_error = "Некоректне значення пресета."
+            return None
+        try:
+            if not self.ensure_growth_preset_table():
+                return None
+            with self.connect() as conn:
+                cur = conn.cursor()
+                existing_id = self._scalar(
+                    cur,
+                    """
+                    SELECT TOP 1 Id
+                    FROM dbo.GrowthPresetTemplates
+                    WHERE LOWER(LTRIM(RTRIM(Label))) = LOWER(?)
+                    ORDER BY Id
+                    """,
+                    label,
+                )
+                if existing_id is not None:
+                    cur.execute(
+                        """
+                        UPDATE dbo.GrowthPresetTemplates
+                        SET Label = ?, FactorValue = ?, IsActive = 1
+                        WHERE Id = ?
+                        """,
+                        label,
+                        value,
+                        existing_id,
+                    )
+                    preset_id = int(existing_id)
+                else:
+                    next_sort_order = self._scalar(
+                        cur,
+                        "SELECT COALESCE(MAX(SortOrder), 0) + 10 FROM dbo.GrowthPresetTemplates",
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO dbo.GrowthPresetTemplates
+                        (Label, FactorValue, Description, SortOrder, IsActive, CreatedByUserId, CreatedAt)
+                        OUTPUT INSERTED.Id
+                        VALUES (?, ?, ?, ?, 1, ?, SYSDATETIME())
+                        """,
+                        label,
+                        value,
+                        "Користувацький відсотковий пресет",
+                        int(next_sort_order or 10),
+                        user_id,
+                    )
+                    preset_id = int(cur.fetchone()[0])
+                conn.commit()
+                return preset_id
+        except Exception as exc:
+            self.last_error = str(exc)
+            return None
+
+    def deactivate_growth_preset_template(self, preset_id: int) -> bool:
+        try:
+            if not self.ensure_growth_preset_table():
+                return False
+            with self.connect() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    "UPDATE dbo.GrowthPresetTemplates SET IsActive = 0 WHERE Id = ?",
+                    preset_id,
+                )
+                if cur.rowcount == 0:
+                    self.last_error = f"Пресет Id={preset_id} не знайдено."
+                    return False
+                conn.commit()
+            return True
+        except Exception as exc:
+            self.last_error = str(exc)
+            return False
+
     # ============================================================
     # DOOR MODEL
     # ============================================================
@@ -3982,6 +4164,7 @@ class ParametricDb:
         axis_link_mode: str = "normal",
         link_x: str = "X = W",
         link_y: str = "Y = H",
+        force_new: bool = False,
     ) -> Optional[int]:
         """
         РћРґРЅР° РїР°РїРєР° = РѕРґРЅР° DoorModel.
@@ -3996,16 +4179,18 @@ class ParametricDb:
             with self.connect() as conn:
                 cur = conn.cursor()
 
-                model_id = self._scalar(
-                    cur,
-                    """
-                    SELECT TOP 1 Id
-                    FROM dbo.DoorModels
-                    WHERE SourceFolderPath = ?
-                    ORDER BY Id DESC
-                    """,
-                    folder_path,
-                )
+                model_id = None
+                if not force_new:
+                    model_id = self._scalar(
+                        cur,
+                        """
+                        SELECT TOP 1 Id
+                        FROM dbo.DoorModels
+                        WHERE SourceFolderPath = ?
+                        ORDER BY Id DESC
+                        """,
+                        folder_path,
+                    )
 
                 if model_id is None:
                     cur.execute(
@@ -4668,21 +4853,22 @@ class ParametricDb:
         parametric_groups: List[Dict[str, Any]],
         block_keep_state: Dict[str, bool],
     ) -> None:
-        cur.execute(
+        existing_rows = cur.execute(
             """
-            DELETE FROM dbo.ProjectGroupEntities
-            WHERE ProjectGroupId IN (
-                SELECT Id
-                FROM dbo.ProjectGroups
-                WHERE ProjectFileId = ?
-            )
+            SELECT Id, Uid
+            FROM dbo.ProjectGroups
+            WHERE ProjectFileId = ?
             """,
             project_file_id,
-        )
-        cur.execute(
-            "DELETE FROM dbo.ProjectGroups WHERE ProjectFileId = ?",
-            project_file_id,
-        )
+        ).fetchall()
+        existing_by_id = {int(row.Id): row.Uid for row in existing_rows}
+        existing_by_uid = {
+            str(row.Uid): int(row.Id)
+            for row in existing_rows
+            if row.Uid is not None
+        }
+        saved_group_ids = set()
+
         cur.execute(
             "DELETE FROM dbo.ProjectBlockStates WHERE ProjectFileId = ?",
             project_file_id,
@@ -4691,44 +4877,30 @@ class ParametricDb:
         for sort_order, group in enumerate(parametric_groups):
             handles = sorted(str(h) for h in group.get("handles", []))
             uid = group.get("uid") or f"{group.get('name', 'group')}|{','.join(handles)}"
+            group["uid"] = uid
             keep = 1 if block_keep_state.get(uid, True) else 0
+            group_id = None
+            raw_group_id = group.get("db_group_id") or group.get("group_id") or group.get("id")
+            try:
+                candidate_group_id = int(raw_group_id) if raw_group_id else None
+            except (TypeError, ValueError):
+                candidate_group_id = None
+            if candidate_group_id in existing_by_id:
+                group_id = candidate_group_id
+            elif uid in existing_by_uid:
+                group_id = existing_by_uid[uid]
 
-            cur.execute(
-                """
-                INSERT INTO dbo.ProjectGroups
-                (
-                    ProjectFileId,
-                    Name,
-                    Uid,
-                    K_W,
-                    K_H,
-                    Growth_P_W,
-                    Growth_P_H,
-                    Growth_Dir_X,
-                    Growth_Dir_Y,
-                    Shift_Dir_X,
-                    Shift_Dir_Y,
-                    Link_X,
-                    Link_Y,
-                    Resizes,
-                    IsKeep,
-                    SortOrder,
-                    CreatedAt
-                )
-                OUTPUT INSERTED.Id
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, SYSDATETIME())
-                """,
-                project_file_id,
-                group.get("name") or "Р“СЂСѓРїР°",
+            group_values = (
+                group.get("name") or "Група",
                 uid,
                 group.get("k_w") or 0,
                 group.get("k_h") or 0,
                 group.get("growth_p_w") or 0,
                 group.get("growth_p_h") or 0,
-                group.get("growth_dir_x") or "Р¦РµРЅС‚СЂ",
-                group.get("growth_dir_y") or "Р¦РµРЅС‚СЂ",
-                group.get("shift_dir_x") or "Р’РїСЂР°РІРѕ",
-                group.get("shift_dir_y") or "Р’РіРѕСЂСѓ",
+                group.get("growth_dir_x") or "Центр",
+                group.get("growth_dir_y") or "Центр",
+                group.get("shift_dir_x") or "Вправо",
+                group.get("shift_dir_y") or "Вгору",
                 group.get("link_x") or "X = W",
                 group.get("link_y") or "Y = H",
                 1 if group.get("resizes") else 0,
@@ -4736,7 +4908,72 @@ class ParametricDb:
                 sort_order,
             )
 
-            group_id = int(cur.fetchone()[0])
+            if group_id:
+                cur.execute(
+                    """
+                    UPDATE dbo.ProjectGroups
+                    SET
+                        Name = ?,
+                        Uid = ?,
+                        K_W = ?,
+                        K_H = ?,
+                        Growth_P_W = ?,
+                        Growth_P_H = ?,
+                        Growth_Dir_X = ?,
+                        Growth_Dir_Y = ?,
+                        Shift_Dir_X = ?,
+                        Shift_Dir_Y = ?,
+                        Link_X = ?,
+                        Link_Y = ?,
+                        Resizes = ?,
+                        IsKeep = ?,
+                        SortOrder = ?
+                    WHERE Id = ? AND ProjectFileId = ?
+                    """,
+                    *group_values,
+                    group_id,
+                    project_file_id,
+                )
+
+            if not group_id:
+                cur.execute(
+                    """
+                    INSERT INTO dbo.ProjectGroups
+                    (
+                        ProjectFileId,
+                        Name,
+                        Uid,
+                        K_W,
+                        K_H,
+                        Growth_P_W,
+                        Growth_P_H,
+                        Growth_Dir_X,
+                        Growth_Dir_Y,
+                        Shift_Dir_X,
+                        Shift_Dir_Y,
+                        Link_X,
+                        Link_Y,
+                        Resizes,
+                        IsKeep,
+                        SortOrder,
+                        CreatedAt
+                    )
+                    OUTPUT INSERTED.Id
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, SYSDATETIME())
+                    """,
+                    project_file_id,
+                    *group_values,
+                )
+                group_id = int(cur.fetchone()[0])
+
+            group["db_group_id"] = group_id
+            group["group_id"] = group_id
+            saved_group_ids.add(group_id)
+
+            cur.execute(
+                "DELETE FROM dbo.ProjectGroupEntities WHERE ProjectGroupId = ?",
+                group_id,
+            )
 
             for handle in handles:
                 cur.execute(
@@ -4757,8 +4994,20 @@ class ParametricDb:
                 """,
                 project_file_id,
                 uid,
-                group.get("name") or "Р“СЂСѓРїР°",
+                group.get("name") or "Група",
                 keep,
+            )
+
+        stale_group_ids = set(existing_by_id) - saved_group_ids
+        for group_id in stale_group_ids:
+            cur.execute(
+                "DELETE FROM dbo.ProjectGroupEntities WHERE ProjectGroupId = ?",
+                group_id,
+            )
+            cur.execute(
+                "DELETE FROM dbo.ProjectGroups WHERE Id = ? AND ProjectFileId = ?",
+                group_id,
+                project_file_id,
             )
 
     def load_project_config(

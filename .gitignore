@@ -11,4 +11,7 @@ dist/
 venv/
 venv
 .venv
+.venv
+.venv*
+.venv.*
 drawing.DXF
